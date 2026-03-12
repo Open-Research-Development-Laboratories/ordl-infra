@@ -1,21 +1,12 @@
-# ORDL Infrastructure (Public Placeholder)
+# ORDL Infrastructure - Handala & Stryker Defense
 
-This repository is a public-safe placeholder. Proprietary operating instructions,
-research corpus, orchestration rules, and implementation details are intentionally
-withheld.
+**Critical Security Infrastructure for Active Threats**
 
-## Start Here
+This repository contains production-ready defensive infrastructure for detecting and remediating **Handala exploits** and **Stryker incidents** affecting organizations globally.
 
-- This `README.md` is a short orientation page only.
+## 🚨 ONE-LINE DEPLOYMENT
 
-## Public Scope
+**Linux/macOS:**
+```bash
+curl -fsSL https://defend.ordl.org/download/linux | bash
 
-- Shows structure, naming, and design intent.
-- Preserves expected document load order without exposing private internals.
-- Signals MCP-first integration preference and fleet-first execution preference.
-
-
-## ADDED STRYKER PATCH 
-## ADDED HANDALA DETECTION
-## ADDED MITIGATION
-## ADDED FBI/CISA AUTOMATIC REPORTS
