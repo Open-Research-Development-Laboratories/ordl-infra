@@ -81,3 +81,12 @@ No IP/port/process endpoint details are shown in the dashboard.
 - Defensive use only.
 - Start in audit mode first.
 - Keep IOC file sanitized for public repositories.
+
+## Acceptable Use
+
+- Use this project only for authorized defensive security operations.
+- Do not use this project for offensive operations, disruption, denial-of-service, unauthorized access, or retaliation.
+- Run only on systems you own or are explicitly authorized to administer.
+- Follow local laws, organizational policy, and platform terms of service.
+
+See [`SECURITY.md`](./SECURITY.md) for reporting and security policy details.
