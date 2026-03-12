@@ -6,12 +6,13 @@ ANCHOR_URLS="${DEFEND_ANCHOR_URLS:-}"
 NODE_ID="${DEFEND_NODE_ID:-}"
 ANCHOR_TOKEN="${DEFEND_ANCHOR_TOKEN:-}"
 POLL_SEC=10
+PROFILE_EVERY_SEC="${DEFEND_PROFILE_EVERY_SEC:-600}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 OUTPUT_DIR="$REPO_ROOT/output/node-agent"
 
 usage() {
-  echo "Usage: node-agent.sh --anchor-url URL|URL1,URL2 [--node-id ID] [--anchor-token TOKEN] [--poll-sec N] [--output-dir DIR]"
+  echo "Usage: node-agent.sh --anchor-url URL|URL1,URL2 [--node-id ID] [--anchor-token TOKEN] [--poll-sec N] [--profile-every-sec N] [--output-dir DIR]"
 }
 
 while [ $# -gt 0 ]; do
@@ -21,6 +22,7 @@ while [ $# -gt 0 ]; do
     --node-id) shift; NODE_ID="${1:-$NODE_ID}" ;;
     --anchor-token) shift; ANCHOR_TOKEN="${1:-$ANCHOR_TOKEN}" ;;
     --poll-sec) shift; POLL_SEC="${1:-10}" ;;
+    --profile-every-sec) shift; PROFILE_EVERY_SEC="${1:-$PROFILE_EVERY_SEC}" ;;
     --output-dir) shift; OUTPUT_DIR="${1:-$OUTPUT_DIR}" ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown arg: $1" >&2; usage >&2; exit 1 ;;
@@ -40,9 +42,11 @@ if [ -z "$ANCHOR_URLS" ]; then
 fi
 [ -z "$NODE_ID" ] && NODE_ID="$(hostname 2>/dev/null || echo node-linux)"
 [ "$POLL_SEC" -lt 2 ] 2>/dev/null && POLL_SEC=2
+[ "$PROFILE_EVERY_SEC" -lt 30 ] 2>/dev/null && PROFILE_EVERY_SEC=30
 
 mkdir -p "$OUTPUT_DIR" "$OUTPUT_DIR/patches"
 LOG_FILE="$OUTPUT_DIR/node-agent.log"
+LAST_PROFILE_EPOCH=0
 
 json_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g; s/\r/\\r/g; s/\n/\\n/g'
@@ -126,6 +130,32 @@ send_task_result() {
   local payload
   payload="{\"node_id\":\"$(json_escape "$NODE_ID")\",\"task_id\":\"$(json_escape "$task_id")\",\"status\":\"$(json_escape "$status")\",\"output\":\"$(json_escape "$output")\"}"
   anchor_post_json "/api/v1/node/task-result" "$payload" || true
+}
+
+send_node_profile() {
+  local host user os_name os_build arch kernel updated_at payload
+  host="$(hostname 2>/dev/null || echo unknown-host)"
+  user="$(id -un 2>/dev/null || echo unknown-user)"
+  os_name="$(uname -s 2>/dev/null || echo unknown-os)"
+  os_build=""
+  if [ -f /etc/os-release ]; then
+    os_name="$(awk -F= '/^NAME=/{gsub(/"/, "", $2); print $2; exit}' /etc/os-release 2>/dev/null || echo "$os_name")"
+    os_build="$(awk -F= '/^VERSION=/{gsub(/"/, "", $2); print $2; exit}' /etc/os-release 2>/dev/null || echo "")"
+  fi
+  arch="$(uname -m 2>/dev/null || echo unknown-arch)"
+  kernel="$(uname -r 2>/dev/null || echo unknown-kernel)"
+  updated_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  payload="{\"node_id\":\"$(json_escape "$NODE_ID")\",\"updated_at\":\"$(json_escape "$updated_at")\",\"profile\":{\"client_host\":\"$(json_escape "$host")\",\"client_user\":\"$(json_escape "$user")\",\"client_os\":\"$(json_escape "$os_name")\",\"client_build\":\"$(json_escape "$os_build")\",\"client_arch\":\"$(json_escape "$arch")\",\"client_kernel\":\"$(json_escape "$kernel")\"}}"
+  anchor_post_json "/api/v1/node/profile" "$payload" || true
+}
+
+maybe_send_node_profile() {
+  local now
+  now="$(date +%s)"
+  if [ "$LAST_PROFILE_EPOCH" -eq 0 ] || [ $((now - LAST_PROFILE_EPOCH)) -ge "$PROFILE_EVERY_SEC" ]; then
+    send_node_profile
+    LAST_PROFILE_EPOCH="$now"
+  fi
 }
 
 fetch_tasks() {
@@ -249,8 +279,10 @@ PY
 
 log_local "node-agent start node_id=$NODE_ID anchors=$ANCHOR_URLS"
 send_node_log "info" "node-agent started"
+maybe_send_node_profile
 
 while true; do
+  maybe_send_node_profile
   tasks_file="$(mktemp)"
   if fetch_tasks "$tasks_file"; then
     python3 - <<PY > "$tasks_file.items"

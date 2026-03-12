@@ -5,6 +5,9 @@ DefendMesh Anchor is the control-plane for distributed defensive nodes.
 - Zero Trust operator access (email-based via Cloudflare Access headers).
 - Node heartbeat ingestion.
 - Node log ingestion.
+- Node profile + triage ingestion.
+- Automatic defensive baseline tasking (audit/monitor) with severity-gated auto-remediation.
+- Optional AI-assisted defensive triage (OpenAI-compatible API).
 - Playbook queue for remote defensive actions.
 - Patch bundle upload + node fetch endpoint.
 
@@ -33,6 +36,30 @@ Zero Trust operator auth:
 - `ANCHOR_ALLOWED_EMAILS` (optional explicit allowlist, comma-separated)
 - `ANCHOR_ADMIN_DEV_TOKEN` (optional fallback bearer token for non-Access lab/dev only)
 
+Email + alerting:
+- `ANCHOR_SMTP_HOST`, `ANCHOR_SMTP_PORT`, `ANCHOR_SMTP_SECURE`, `ANCHOR_SMTP_USER`, `ANCHOR_SMTP_PASS`, `ANCHOR_SMTP_FROM`
+- `ANCHOR_SMTP_REPLY_TO`, `ANCHOR_SMTP_HELO`, `ANCHOR_SMTP_TLS_REJECT_UNAUTHORIZED`
+- `ANCHOR_THREAT_ALERT_EMAILS` (comma-separated recipients)
+- `ANCHOR_THREAT_ALERT_MIN_SEVERITY` (default `high`)
+- `ANCHOR_THREAT_ALERT_COOLDOWN_SEC` (default `300`)
+
+Auto defensive playbooks:
+- `ANCHOR_AUTO_PLAYBOOKS` (default `true`)
+- `ANCHOR_AUTO_AUDIT_SEC` (default `300`)
+- `ANCHOR_AUTO_MONITOR_SEC` (default `120`)
+- `ANCHOR_AUTO_REMEDIATE_MIN_SEVERITY` (default `high`)
+- `ANCHOR_AUTO_REMEDIATE_COOLDOWN_SEC` (default `600`)
+
+AI triage (OpenAI-compatible):
+- `ANCHOR_AI_TRIAGE_ENABLED` (default `true`)
+- `ANCHOR_AI_BASE_URL` (default `https://api.openai.com/v1`)
+- `ANCHOR_AI_MODEL` (required to enable calls)
+- `ANCHOR_AI_API_KEY` (optional for local/self-hosted providers, otherwise required)
+- `ANCHOR_AI_TIMEOUT_MS` (default `8000`)
+- `ANCHOR_AI_MAX_CONTEXT_CHARS` (default `12000`)
+- `ANCHOR_AI_MIN_SEVERITY` (default `info`)
+- `ANCHOR_AI_FULL_CONTEXT` (default `false`)
+
 ## Cloudflare Zero Trust (defend.ordl.org)
 
 Recommended:
@@ -47,12 +74,21 @@ Public/health:
 - `GET /health`
 - `GET /` (auto-refresh dashboard)
 - `GET /api/v1/nodes`
+- `GET /download/linux`
+- `GET /download/macos`
+- `GET /download/windows`
+- `GET /download/remove/linux`
+- `GET /download/remove/macos`
+- `GET /download/remove/windows`
 
 Node endpoints (node auth required if configured):
 - `POST /api/v1/heartbeat`
 - `POST /api/v1/node/log`
 - `GET /api/v1/node/tasks?node_id=<id>`
+- `GET /api/v1/node/status?node_id=<id>`
 - `POST /api/v1/node/task-result`
+- `POST /api/v1/node/triage`
+- `POST /api/v1/node/profile`
 - `GET /api/v1/node/patch/<patch_id>`
 
 Admin endpoints (Zero Trust email required):
@@ -72,6 +108,10 @@ Admin endpoints (Zero Trust email required):
 - `monitor_stop`
 - `monitor_oneshot`
 - `stage_patch`
+
+Note:
+- Arbitrary shell/python remote execution is intentionally disabled.
+- Use approved playbooks and signed patch staging only.
 
 ## Security Notes
 

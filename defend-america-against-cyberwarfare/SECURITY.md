@@ -12,6 +12,7 @@ The following uses are not allowed:
 - Retaliation or "hack back" activity.
 - Unauthorized access, disruption, or destruction of systems or data.
 - Deployment on systems without explicit authorization.
+- Arbitrary remote shell/python command execution outside approved defensive playbooks.
 
 ## Safe Deployment Guidance
 
@@ -20,6 +21,7 @@ The following uses are not allowed:
 - Restrict control-file and token access to administrators.
 - Keep secrets out of source control.
 - Review outputs before sharing externally.
+- If enabling AI triage, minimize sensitive payloads and keep `ANCHOR_AI_FULL_CONTEXT=false` unless explicitly required by policy.
 
 ## Reporting Vulnerabilities
 

@@ -4,6 +4,7 @@ param(
     [string]$NodeId = $env:DEFEND_NODE_ID,
     [string]$AnchorToken = $env:DEFEND_ANCHOR_TOKEN,
     [int]$PollSec = 10,
+    [int]$ProfileEverySec = $(if ([string]::IsNullOrWhiteSpace($env:DEFEND_PROFILE_EVERY_SEC)) { 600 } else { [int]$env:DEFEND_PROFILE_EVERY_SEC }),
     [string]$OutputDir
 )
 
@@ -41,6 +42,7 @@ if ($anchorUrls.Count -eq 0) {
 }
 $anchorUrlList = ($anchorUrls.ToArray() -join ',')
 if ($PollSec -lt 2) { $PollSec = 2 }
+if ($ProfileEverySec -lt 30) { $ProfileEverySec = 30 }
 
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $OutputDir 'patches') -Force | Out-Null
@@ -100,6 +102,37 @@ function Send-TaskResult {
             task_id = $TaskId
             status = $Status
             output = $Output
+        } | Out-Null
+    } catch {}
+}
+
+function Send-NodeProfile {
+    try {
+        $osInfo = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+        $profile = @{
+            client_host = $env:COMPUTERNAME
+            client_user = ('{0}\{1}' -f $env:USERDOMAIN, $env:USERNAME)
+            client_os = [string]$osInfo.Caption
+            client_build = ('{0} ({1})' -f [string]$osInfo.Version, [string]$osInfo.BuildNumber)
+            client_arch = [string]$env:PROCESSOR_ARCHITECTURE
+            client_kernel = [string]$osInfo.Version
+        }
+    } catch {
+        $profile = @{
+            client_host = $env:COMPUTERNAME
+            client_user = ('{0}\{1}' -f $env:USERDOMAIN, $env:USERNAME)
+            client_os = 'windows'
+            client_build = ''
+            client_arch = [string]$env:PROCESSOR_ARCHITECTURE
+            client_kernel = ''
+        }
+    }
+
+    try {
+        Invoke-Anchor -Method 'Post' -Path '/api/v1/node/profile' -Body @{
+            node_id = $NodeId
+            updated_at = (Get-Date).ToUniversalTime().ToString('o')
+            profile = $profile
         } | Out-Null
     } catch {}
 }
@@ -179,8 +212,15 @@ function Run-Task {
 
 Write-AgentLog "node-agent start node_id=$NodeId anchors=$anchorUrlList"
 Send-NodeLog -Level 'info' -Message 'node-agent started'
+$lastProfileUtc = [datetime]::MinValue
+Send-NodeProfile
+$lastProfileUtc = [datetime]::UtcNow
 
 while ($true) {
+    if (([datetime]::UtcNow - $lastProfileUtc).TotalSeconds -ge $ProfileEverySec) {
+        Send-NodeProfile
+        $lastProfileUtc = [datetime]::UtcNow
+    }
     try {
         $resp = Invoke-Anchor -Method 'Get' -Path ("/api/v1/node/tasks?node_id={0}" -f [Uri]::EscapeDataString($NodeId))
         if ($resp.tasks) {

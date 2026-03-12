@@ -22,7 +22,7 @@ const cfServiceId = process.env.ANCHOR_CF_SERVICE_TOKEN_ID || '';
 const cfServiceSecret = process.env.ANCHOR_CF_SERVICE_TOKEN_SECRET || '';
 
 const adminDevToken = process.env.ANCHOR_ADMIN_DEV_TOKEN || '';
-const openEnroll = String(process.env.ANCHOR_OPEN_ENROLL || 'true').trim().toLowerCase() !== 'false';
+const openEnroll = String(process.env.ANCHOR_OPEN_ENROLL || 'false').trim().toLowerCase() !== 'false';
 const adminEmailTokenTtlSec = Math.max(60, Number(process.env.ANCHOR_ADMIN_EMAIL_TOKEN_TTL_SEC || 600) || 600);
 const adminSessionIdleSec = Math.max(60, Number(process.env.ANCHOR_ADMIN_SESSION_IDLE_SEC || 1800) || 1800);
 const adminSessionMaxSec = Math.max(adminSessionIdleSec, Number(process.env.ANCHOR_ADMIN_SESSION_MAX_SEC || 28800) || 28800);
@@ -37,9 +37,28 @@ const smtpFrom = String(process.env.ANCHOR_SMTP_FROM || '').trim();
 const smtpReplyTo = String(process.env.ANCHOR_SMTP_REPLY_TO || '').trim();
 const smtpHeloName = String(process.env.ANCHOR_SMTP_HELO || 'defend.ordl.org').trim();
 const smtpTlsRejectUnauthorized = String(process.env.ANCHOR_SMTP_TLS_REJECT_UNAUTHORIZED || 'true').trim().toLowerCase() !== 'false';
+const threatAlertEmails = (process.env.ANCHOR_THREAT_ALERT_EMAILS || '')
+  .split(',')
+  .map((v) => v.trim())
+  .filter(Boolean);
+const threatAlertMinSeverity = String(process.env.ANCHOR_THREAT_ALERT_MIN_SEVERITY || 'high').trim().toLowerCase();
+const threatAlertCooldownSec = Math.max(30, Number(process.env.ANCHOR_THREAT_ALERT_COOLDOWN_SEC || 300) || 300);
+const autoPlaybooksEnabled = String(process.env.ANCHOR_AUTO_PLAYBOOKS || 'true').trim().toLowerCase() !== 'false';
+const autoAuditIntervalSec = Math.max(15, Number(process.env.ANCHOR_AUTO_AUDIT_SEC || 300) || 300);
+const autoMonitorIntervalSec = Math.max(10, Number(process.env.ANCHOR_AUTO_MONITOR_SEC || 120) || 120);
+const autoRemediateMinSeverity = String(process.env.ANCHOR_AUTO_REMEDIATE_MIN_SEVERITY || 'high').trim().toLowerCase();
+const autoRemediateCooldownSec = Math.max(30, Number(process.env.ANCHOR_AUTO_REMEDIATE_COOLDOWN_SEC || 600) || 600);
+const aiTriageEnabled = String(process.env.ANCHOR_AI_TRIAGE_ENABLED || 'true').trim().toLowerCase() !== 'false';
+const aiTriageBaseUrl = String(process.env.ANCHOR_AI_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').trim();
+const aiTriageApiKey = String(process.env.ANCHOR_AI_API_KEY || process.env.OPENAI_API_KEY || '').trim();
+const aiTriageModel = String(process.env.ANCHOR_AI_MODEL || '').trim();
+const aiTriageTimeoutMs = Math.max(1000, Number(process.env.ANCHOR_AI_TIMEOUT_MS || 8000) || 8000);
+const aiTriageMaxContextChars = Math.max(1500, Number(process.env.ANCHOR_AI_MAX_CONTEXT_CHARS || 12000) || 12000);
+const aiTriageMinSeverity = String(process.env.ANCHOR_AI_MIN_SEVERITY || 'info').trim().toLowerCase();
+const aiTriageFullContext = String(process.env.ANCHOR_AI_FULL_CONTEXT || 'false').trim().toLowerCase() === 'true';
 const missionStatement = String(
   process.env.ANCHOR_MISSION_STATEMENT ||
-  'Mission: Strengthen lawful defensive cyber readiness to help protect the country during times of need.'
+  'Mission: Strengthen lawful defensive cyber readiness to protect U.S. citizens, support the military and lawful civilian chain of command (including the Commander in Chief), and reduce harm to civilians at home and abroad during cyber crises.'
 ).trim();
 const allowedEmails = (process.env.ANCHOR_ALLOWED_EMAILS || '')
   .split(',')
@@ -59,8 +78,11 @@ const profilesByNode = new Map();
 const triageByNode = new Map();
 const nodeTokensByNode = new Map();
 const nodeIdsByToken = new Map();
+const taskMetaById = new Map();
 const adminChallengesByEmail = new Map();
 const adminSessionsByToken = new Map();
+const threatAlertLastSentByKey = new Map();
+const autoDispatchStateByNode = new Map();
 
 const PLAYBOOKS = new Set([
   'endpoint_audit',
@@ -273,6 +295,15 @@ function normalizeBool(value) {
   return v === 'true' || v === 'yes' || v === '1';
 }
 
+function severityRank(value) {
+  const v = String(value || '').trim().toLowerCase();
+  if (v === 'critical') return 4;
+  if (v === 'high') return 3;
+  if (v === 'medium') return 2;
+  if (v === 'low') return 1;
+  return 0;
+}
+
 function isFiniteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
 }
@@ -307,6 +338,102 @@ function pushBounded(map, key, value, maxLen) {
   const arr = map.get(key);
   arr.push(value);
   while (arr.length > maxLen) arr.shift();
+}
+
+function latestFromBoundedMap(map, key) {
+  const arr = map.get(key);
+  if (!Array.isArray(arr) || arr.length < 1) return null;
+  return arr[arr.length - 1];
+}
+
+function normalizeSeverity(value, fallback = 'info') {
+  const v = String(value || '').trim().toLowerCase();
+  if (v === 'critical' || v === 'high' || v === 'medium' || v === 'low' || v === 'info') return v;
+  return fallback;
+}
+
+function queueHasPlaybook(queue, playbook) {
+  return Array.isArray(queue) && queue.some((item) => String(item && item.playbook || '').trim() === playbook);
+}
+
+function enqueueTask(nodeId, playbook, args, createdBy, dispatchId, createdAt) {
+  const task = {
+    task_id: makeTaskId(),
+    dispatch_id: dispatchId || `dispatch_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`,
+    node_id: nodeId,
+    playbook,
+    args: args && typeof args === 'object' ? args : {},
+    created_at: createdAt || new Date().toISOString(),
+    created_by: createdBy || 'system'
+  };
+  const queue = getQueue(nodeId);
+  queue.push(task);
+  taskMetaById.set(task.task_id, {
+    task_id: task.task_id,
+    node_id: nodeId,
+    playbook,
+    dispatch_id: task.dispatch_id,
+    created_at: task.created_at,
+    created_by: task.created_by
+  });
+  if (taskMetaById.size > 50000) {
+    const oldestKey = taskMetaById.keys().next();
+    if (oldestKey && !oldestKey.done) taskMetaById.delete(oldestKey.value);
+  }
+  return task;
+}
+
+function maybeEnqueueAutoPlaybooks(nodeId, severityRaw) {
+  if (!autoPlaybooksEnabled || !nodeId) return [];
+
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const state = autoDispatchStateByNode.get(nodeId) || {
+    last_audit_ms: 0,
+    last_monitor_ms: 0,
+    last_remediate_ms: 0
+  };
+  const queue = getQueue(nodeId);
+  const out = [];
+
+  if (nowMs - state.last_audit_ms >= autoAuditIntervalSec * 1000 && !queueHasPlaybook(queue, 'endpoint_audit')) {
+    const task = enqueueTask(nodeId, 'endpoint_audit', { mode: 'auto', reason: 'continuous_audit' }, 'system:auto', `auto_${nowMs}_audit`, nowIso);
+    out.push(task);
+    state.last_audit_ms = nowMs;
+  }
+
+  if (nowMs - state.last_monitor_ms >= autoMonitorIntervalSec * 1000 && !queueHasPlaybook(queue, 'monitor_oneshot')) {
+    const task = enqueueTask(
+      nodeId,
+      'monitor_oneshot',
+      { mode: 'auto', interval_sec: 2, loop_count: 5 },
+      'system:auto',
+      `auto_${nowMs}_monitor`,
+      nowIso
+    );
+    out.push(task);
+    state.last_monitor_ms = nowMs;
+  }
+
+  if (
+    severityRank(severityRaw) >= severityRank(autoRemediateMinSeverity) &&
+    nowMs - state.last_remediate_ms >= autoRemediateCooldownSec * 1000 &&
+    !queueHasPlaybook(queue, 'endpoint_remediate')
+  ) {
+    const task = enqueueTask(
+      nodeId,
+      'endpoint_remediate',
+      { mode: 'auto', reason: `severity_${normalizeSeverity(severityRaw, 'high')}` },
+      'system:auto',
+      `auto_${nowMs}_remediate`,
+      nowIso
+    );
+    out.push(task);
+    state.last_remediate_ms = nowMs;
+  }
+
+  autoDispatchStateByNode.set(nodeId, state);
+  return out;
 }
 
 function nodeAuthOk(req) {
@@ -524,7 +651,7 @@ async function smtpSendCmd(socket, reader, command, expectedCodes) {
   return resp;
 }
 
-async function smtpSendAdminTokenEmail(email, token, expiresAtIso) {
+async function smtpSendTextEmail(email, subject, bodyText) {
   let socket = null;
   try {
     socket = await smtpOpenSocket(smtpSecure, null);
@@ -555,13 +682,9 @@ async function smtpSendAdminTokenEmail(email, token, expiresAtIso) {
     await smtpSendCmd(socket, reader, `MAIL FROM:<${smtpFrom}>`, [250]);
     await smtpSendCmd(socket, reader, `RCPT TO:<${email}>`, [250, 251]);
     await smtpSendCmd(socket, reader, 'DATA', [354]);
-
-    const subject = `DefendMesh Admin Access Token (${anchorName})`;
-    const bodyText =
-      `Your DefendMesh admin access token is: ${token}\n` +
-      `Expires at: ${expiresAtIso}\n` +
-      `Anchor: ${publicUrlBase}\n\n` +
-      `If you did not request this, ignore this message.`;
+    const safeSubject = String(subject || '')
+      .replace(/\r|\n/g, ' ')
+      .slice(0, 220);
 
     const safeBody = bodyText
       .replace(/\r?\n/g, '\r\n')
@@ -572,7 +695,7 @@ async function smtpSendAdminTokenEmail(email, token, expiresAtIso) {
     const headers = [
       `From: ${smtpFrom}`,
       `To: ${email}`,
-      `Subject: ${subject}`,
+      `Subject: ${safeSubject}`,
       'MIME-Version: 1.0',
       'Content-Type: text/plain; charset=UTF-8',
       smtpReplyTo ? `Reply-To: ${smtpReplyTo}` : ''
@@ -592,7 +715,7 @@ async function smtpSendAdminTokenEmail(email, token, expiresAtIso) {
       // Ignore quit failures; email was already accepted if DATA returned 250.
     }
     socket.end();
-    return { ok: true, mode: 'smtp' };
+    return { ok: true, mode: 'smtp', to: email };
   } catch (err) {
     if (socket) {
       try {
@@ -601,8 +724,18 @@ async function smtpSendAdminTokenEmail(email, token, expiresAtIso) {
         // Ignore socket teardown issues.
       }
     }
-    return { ok: false, mode: 'smtp', error: String(err && err.message || err || 'smtp_failed') };
+    return { ok: false, mode: 'smtp', to: email, error: String(err && err.message || err || 'smtp_failed') };
   }
+}
+
+async function smtpSendAdminTokenEmail(email, token, expiresAtIso) {
+  const subject = `DefendMesh Admin Access Token (${anchorName})`;
+  const bodyText =
+    `Your DefendMesh admin access token is: ${token}\n` +
+    `Expires at: ${expiresAtIso}\n` +
+    `Anchor: ${publicUrlBase}\n\n` +
+    `If you did not request this, ignore this message.`;
+  return smtpSendTextEmail(email, subject, bodyText);
 }
 
 async function dispatchAdminToken(email, token, expiresAtIso) {
@@ -632,6 +765,229 @@ async function dispatchAdminToken(email, token, expiresAtIso) {
   }
 
   return { ok: false, mode: 'none', error: 'email_dispatch_not_configured' };
+}
+
+function shouldSendThreatAlert(nodeId, severity) {
+  if (!nodeId) return false;
+  if (threatAlertEmails.length === 0) return false;
+  if (!smtpConfigured()) return false;
+  if (severityRank(severity) < severityRank(threatAlertMinSeverity)) return false;
+  const key = `${nodeId}:${String(severity || '').toLowerCase()}`;
+  const nowMs = Date.now();
+  const lastMs = Number(threatAlertLastSentByKey.get(key) || 0);
+  if (lastMs > 0 && nowMs - lastMs < threatAlertCooldownSec * 1000) {
+    return false;
+  }
+  threatAlertLastSentByKey.set(key, nowMs);
+  return true;
+}
+
+async function dispatchThreatAlertEmail(item) {
+  if (!item || typeof item !== 'object') return { ok: false, reason: 'invalid_item' };
+  if (!shouldSendThreatAlert(item.node_id, item.severity)) {
+    return { ok: false, reason: 'not_eligible' };
+  }
+
+  const subject = `[DefendMesh][${String(item.severity || 'info').toUpperCase()}] ${item.node_id}`;
+  const indicators = Array.isArray(item.indicators) ? item.indicators.slice(0, 30) : [];
+  const counts = item.counts && typeof item.counts === 'object' ? item.counts : {};
+  const body =
+    `Threat alert generated by DefendMesh.\n` +
+    `Node: ${item.node_id}\n` +
+    `Severity: ${item.severity}\n` +
+    `Source: ${item.source || 'endpoint'}\n` +
+    `At: ${item.at}\n` +
+    `Summary: ${item.summary || '-'}\n` +
+    `Indicators: ${indicators.join(', ') || '-'}\n` +
+    `Counts: ${JSON.stringify(counts)}\n` +
+    `Anchor: ${publicUrlBase}/admin\n`;
+
+  const results = [];
+  for (const email of threatAlertEmails) {
+    // eslint-disable-next-line no-await-in-loop
+    const sent = await smtpSendTextEmail(email, subject, body);
+    results.push(sent);
+  }
+  const sentCount = results.filter((r) => r && r.ok).length;
+  return { ok: sentCount > 0, sent: sentCount, total: results.length, results };
+}
+
+function aiTriageConfigured() {
+  return aiTriageEnabled && !!aiTriageModel && !!aiTriageBaseUrl;
+}
+
+function extractAiJsonObject(text) {
+  let raw = String(text || '').trim();
+  if (!raw) return null;
+  if (raw.startsWith('```')) {
+    raw = raw.replace(/^```[a-zA-Z]*\s*/, '').replace(/\s*```$/, '').trim();
+  }
+  try {
+    const direct = JSON.parse(raw);
+    return direct && typeof direct === 'object' ? direct : null;
+  } catch (_) {
+    // Try bracket extraction fallback.
+  }
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    try {
+      const obj = JSON.parse(raw.slice(start, end + 1));
+      return obj && typeof obj === 'object' ? obj : null;
+    } catch (_) {
+      return null;
+    }
+  }
+  return null;
+}
+
+function compactStringList(value, maxItems = 8, maxLen = 120) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((v) => String(v || '').trim())
+    .filter(Boolean)
+    .slice(0, maxItems)
+    .map((v) => v.slice(0, maxLen));
+}
+
+function aiContextForNode(item) {
+  const nodeId = String(item && item.node_id || '').trim();
+  const node = nodes.get(nodeId) || null;
+  const profile = profilesByNode.get(nodeId) || null;
+  const recentLogs = (logsByNode.get(nodeId) || []).slice(-12);
+  const recentResults = (resultsByNode.get(nodeId) || []).slice(-10);
+  const recentTriage = (triageByNode.get(nodeId) || []).slice(-10, -1);
+
+  const compactLogs = recentLogs.map((v) => ({
+    at: String(v.at || ''),
+    level: String(v.level || ''),
+    message: String(v.message || '').slice(0, 180)
+  }));
+  const compactResults = recentResults.map((v) => ({
+    at: String(v.at || ''),
+    task_id: String(v.task_id || ''),
+    status: String(v.status || ''),
+    output: String(v.output || '').slice(0, 200)
+  }));
+  const compactTriage = recentTriage.map((v) => ({
+    at: String(v.at || ''),
+    severity: normalizeSeverity(v.severity, 'info'),
+    summary: String(v.summary || '').slice(0, 200),
+    source: String(v.source || '').slice(0, 64)
+  }));
+
+  const context = {
+    node: {
+      node_id: nodeId,
+      platform: String(node && node.platform || 'unknown'),
+      connections_present: !!(node && node.connections_present),
+      current_count: isFiniteNumber(node && node.current_count) ? node.current_count : 0,
+      active_sockets: isFiniteNumber(node && node.current_count) ? node.current_count : 0,
+      trend: String(node && node.trend || 'unknown'),
+      latency_ms: isFiniteNumber(node && node.latency_ms) ? node.latency_ms : 0
+    },
+    triage_event: {
+      at: String(item.at || ''),
+      source: String(item.source || 'endpoint'),
+      severity: normalizeSeverity(item.severity, 'info'),
+      summary: String(item.summary || '').slice(0, 1200),
+      indicators: compactStringList(item.indicators, 32, 120),
+      counts: item.counts && typeof item.counts === 'object' ? item.counts : {}
+    },
+    recent_triage: compactTriage
+  };
+
+  if (profile) {
+    context.host_profile = {
+      client_host: String(profile.client_host || '').slice(0, 128),
+      client_user: String(profile.client_user || '').slice(0, 128),
+      client_os: String(profile.client_os || '').slice(0, 128),
+      client_build: String(profile.client_build || '').slice(0, 128),
+      client_arch: String(profile.client_arch || '').slice(0, 64),
+      client_kernel: String(profile.client_kernel || '').slice(0, 128)
+    };
+  }
+
+  if (aiTriageFullContext) {
+    context.recent_logs = compactLogs;
+    context.recent_results = compactResults;
+  } else {
+    context.recent_logs = compactLogs.slice(-5);
+    context.recent_results = compactResults.slice(-5);
+  }
+
+  return context;
+}
+
+async function aiTriageAssist(item) {
+  if (!item || typeof item !== 'object') return { ok: false, error: 'invalid_item' };
+  if (!aiTriageConfigured()) return { ok: false, error: 'not_configured' };
+  if (severityRank(item.severity) < severityRank(aiTriageMinSeverity)) return { ok: false, error: 'below_min_severity' };
+
+  const endpoint = `${aiTriageBaseUrl.replace(/\/+$/, '')}/chat/completions`;
+  const context = aiContextForNode(item);
+  let contextText = JSON.stringify(context);
+  if (contextText.length > aiTriageMaxContextChars) {
+    contextText = contextText.slice(0, aiTriageMaxContextChars);
+  }
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (aiTriageApiKey) {
+    headers.Authorization = `Bearer ${aiTriageApiKey}`;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), aiTriageTimeoutMs);
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: aiTriageModel,
+        temperature: 0,
+        max_tokens: 400,
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a defensive cyber triage assistant. Provide only defensive mitigation guidance. Return strict JSON with keys: severity, summary, confidence, mitigation_steps, tags.'
+          },
+          {
+            role: 'user',
+            content: contextText
+          }
+        ]
+      })
+    });
+    if (!response.ok) {
+      return { ok: false, error: `http_${response.status}` };
+    }
+    const data = await response.json();
+    const message = data && data.choices && data.choices[0] && data.choices[0].message ? data.choices[0].message : null;
+    let content = message ? message.content : '';
+    if (Array.isArray(content)) {
+      content = content
+        .map((part) => (typeof part === 'string' ? part : String(part && part.text || '')))
+        .join('\n');
+    }
+    const parsed = extractAiJsonObject(content);
+    if (!parsed) return { ok: false, error: 'invalid_ai_json' };
+
+    const ai = {
+      model: aiTriageModel,
+      assessed_at: new Date().toISOString(),
+      severity: normalizeSeverity(parsed.severity, normalizeSeverity(item.severity, 'info')),
+      summary: String(parsed.summary || '').slice(0, 1200),
+      confidence: Math.max(0, Math.min(1, Number(parsed.confidence || 0) || 0)),
+      mitigation_steps: compactStringList(parsed.mitigation_steps, 12, 180),
+      tags: compactStringList(parsed.tags, 12, 64)
+    };
+    return { ok: true, ai };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message || err || 'ai_triage_failed') };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function adminAuth(req) {
@@ -671,7 +1027,7 @@ function asNodeSnapshot(nowMs) {
   const out = [];
   for (const node of nodes.values()) {
     const profile = profilesByNode.get(node.node_id) || {};
-    const triage = triageByNode.get(node.node_id) || null;
+    const triage = latestFromBoundedMap(triageByNode, node.node_id);
     const firstSeenMs = Number.isFinite(node._firstSeenMs) ? node._firstSeenMs : node._updatedMs;
     const ageSec = Math.max(0, Math.floor((nowMs - firstSeenMs) / 1000));
     out.push({
@@ -679,6 +1035,7 @@ function asNodeSnapshot(nowMs) {
       platform: node.platform,
       connections_present: node.connections_present,
       current_count: node.current_count,
+      active_sockets: node.current_count,
       trend: node.trend,
       updated_at: node.updated_at,
       age_sec: ageSec,
@@ -723,7 +1080,22 @@ function downloadAssetMap() {
   return {
     'deploy-all.sh': `${rawBase}/scripts/deploy/deploy-all.sh`,
     'linux-connection-monitor.sh': `${rawBase}/scripts/linux/connection-monitor.sh`,
-    'windows-connection-monitor.ps1': `${rawBase}/scripts/windows/connection-monitor.ps1`
+    'windows-connection-monitor.ps1': `${rawBase}/scripts/windows/connection-monitor.ps1`,
+    'linux-remove.sh': `${rawBase}/scripts/remove/linux-remove.sh`,
+    'macos-remove.sh': `${rawBase}/scripts/remove/macos-remove.sh`,
+    'windows-remove.ps1': `${rawBase}/scripts/remove/windows-remove.ps1`
+  };
+}
+
+function downloadLocalAssetMap() {
+  const repoBase = `${__dirname}/..`;
+  return {
+    'deploy-all.sh': `${repoBase}/scripts/deploy/deploy-all.sh`,
+    'linux-connection-monitor.sh': `${repoBase}/scripts/linux/connection-monitor.sh`,
+    'windows-connection-monitor.ps1': `${repoBase}/scripts/windows/connection-monitor.ps1`,
+    'linux-remove.sh': `${repoBase}/scripts/remove/linux-remove.sh`,
+    'macos-remove.sh': `${repoBase}/scripts/remove/macos-remove.sh`,
+    'windows-remove.ps1': `${repoBase}/scripts/remove/windows-remove.ps1`
   };
 }
 
@@ -866,6 +1238,53 @@ Write-Output ('started monitor pid=' + $proc.Id + ' node=' + $NodeId + ' anchor=
 `;
 }
 
+function downloadRemoveLinuxScript() {
+  return `#!/usr/bin/env bash
+set -euo pipefail
+HOME_BASE="\${HOME:-/tmp}"
+DEFAULT_ROOT="\${DEFEND_ROOT_DIR:-$HOME_BASE/.defendmesh}"
+WORK_DIR="\${DEFEND_WORK_DIR:-\${TMPDIR:-/tmp}/defendmesh-bootstrap}"
+echo "[1/4] Stopping DefendMesh monitor/agent processes..."
+pkill -f 'connection-monitor.sh' 2>/dev/null || true
+pkill -f 'node-agent.sh' 2>/dev/null || true
+echo "[2/4] Removing bootstrap workspace..."
+rm -rf "$WORK_DIR" 2>/dev/null || true
+echo "[3/4] Removing DefendMesh output directories..."
+rm -rf "$DEFAULT_ROOT" 2>/dev/null || true
+rm -rf "./output/live-dashboard" "./output/node-agent" "./output/oneclick-live-dashboard" "./output/oneclick-node-agent" 2>/dev/null || true
+echo "[4/4] Removal complete."
+`;
+}
+
+function downloadRemoveMacosScript() {
+  return downloadRemoveLinuxScript();
+}
+
+function downloadRemoveWindowsScript() {
+  return `$ErrorActionPreference = 'SilentlyContinue'
+$root = if ($env:DEFEND_ROOT_DIR) { $env:DEFEND_ROOT_DIR } else { Join-Path $env:USERPROFILE '.defendmesh' }
+$work = if ($env:DEFEND_WORK_DIR) { $env:DEFEND_WORK_DIR } else { Join-Path $env:TEMP 'defendmesh-bootstrap' }
+Write-Output '[1/4] Stopping DefendMesh monitor/agent processes...'
+Get-CimInstance Win32_Process | Where-Object {
+  $_.CommandLine -and (
+    $_.CommandLine -like '*connection-monitor.ps1*' -or
+    $_.CommandLine -like '*node-agent.ps1*'
+  )
+} | ForEach-Object {
+  try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+}
+Write-Output '[2/4] Removing bootstrap workspace...'
+Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+Write-Output '[3/4] Removing DefendMesh output directories...'
+Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath '.\\output\\live-dashboard' -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath '.\\output\\node-agent' -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath '.\\output\\oneclick-live-dashboard' -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath '.\\output\\oneclick-node-agent' -Recurse -Force -ErrorAction SilentlyContinue
+Write-Output '[4/4] Removal complete.'
+`;
+}
+
 function renderNodes(nodes, authorized) {
   return nodes.map((n) => ({
     ...n,
@@ -882,12 +1301,70 @@ function dashboardHtml(authorized) {
   const linuxDl = `${publicUrlBase}/download/linux`;
   const macDl = `${publicUrlBase}/download/macos`;
   const winDl = `${publicUrlBase}/download/windows`;
+  const linuxRmDl = `${publicUrlBase}/download/remove/linux`;
+  const macRmDl = `${publicUrlBase}/download/remove/macos`;
+  const winRmDl = `${publicUrlBase}/download/remove/windows`;
   const winMonitor = `${publicUrlBase}/download/asset/windows-connection-monitor.ps1`;
   const linMonitor = `${publicUrlBase}/download/asset/linux-connection-monitor.sh`;
+  const linRemoveAsset = `${publicUrlBase}/download/asset/linux-remove.sh`;
+  const macRemoveAsset = `${publicUrlBase}/download/asset/macos-remove.sh`;
+  const winRemoveAsset = `${publicUrlBase}/download/asset/windows-remove.ps1`;
   const deployAll = `${publicUrlBase}/download/asset/deploy-all.sh`;
   const cmdLinux = `curl -fsSL ${linuxDl} | bash`;
   const cmdMac = `curl -fsSL ${macDl} | bash`;
   const cmdWin = `powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr -UseBasicParsing ${winDl} -OutFile $env:TEMP\\defendmesh.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\\defendmesh.ps1"`;
+  const rmCmdLinux = `curl -fsSL ${linuxRmDl} | bash`;
+  const rmCmdMac = `curl -fsSL ${macRmDl} | bash`;
+  const rmCmdWin = `powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr -UseBasicParsing ${winRmDl} -OutFile $env:TEMP\\defendmesh-remove.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\\defendmesh-remove.ps1"`;
+  const refreshMeta = authorized ? '' : '<meta http-equiv="refresh" content="5">';
+  const playbookOptions = Array.from(PLAYBOOKS)
+    .sort((a, b) => a.localeCompare(b))
+    .map((p) => `<option value="${escHtml(p)}">${escHtml(p)}</option>`)
+    .join('');
+  const nodeChoices = list.length
+    ? list
+        .map((n) => `<label class="node-choice"><input type="checkbox" name="op-node" value="${escHtml(n.node_id)}"> ${escHtml(n.node_id)} <span class="meta-mini">(${escHtml(n.platform)})</span></label>`)
+        .join('')
+    : '<div class="meta-mini">No nodes currently reported.</div>';
+  const adminOpsPanel = authorized
+    ? `<div class="ops">
+<h2 style="margin:14px 0 8px 0;font-size:15px;text-transform:uppercase;letter-spacing:.05em;">Admin Operations</h2>
+<div class="meta">Approved playbooks and signed patch staging only. Arbitrary shell/python execution is intentionally disabled.</div>
+<div class="ops-grid">
+<div class="panel2">
+<h3>Dispatch Playbook</h3>
+<label class="field-label" for="op-playbook">Playbook</label>
+<select id="op-playbook" class="op-input">${playbookOptions}</select>
+<label class="field-label" for="op-target">Target Mode</label>
+<select id="op-target" class="op-input">
+<option value="one">one</option>
+<option value="many">many</option>
+<option value="all">all</option>
+</select>
+<label class="field-label" for="op-limit">Limit (optional for all/many)</label>
+<input id="op-limit" class="op-input" type="number" min="1" placeholder="e.g. 2">
+<label class="field-label">Node Selection</label>
+<div class="node-list" id="op-node-list">${nodeChoices}</div>
+<label class="field-label" for="op-args">Args JSON (object)</label>
+<textarea id="op-args" class="op-input op-textarea" placeholder='{"interval_sec":2}'></textarea>
+<button class="copy-btn" type="button" id="op-send-task">send task</button>
+<pre id="op-task-result">idle</pre>
+</div>
+<div class="panel2">
+<h3>Patch Upload</h3>
+<label class="field-label" for="op-patch-filename">Filename</label>
+<input id="op-patch-filename" class="op-input" type="text" placeholder="harden.sh">
+<label class="field-label" for="op-patch-content">Patch / Script Content</label>
+<textarea id="op-patch-content" class="op-input op-textarea" placeholder="#!/usr/bin/env bash"></textarea>
+<div style="display:flex;gap:8px;flex-wrap:wrap;">
+<button class="copy-btn" type="button" id="op-upload-patch">upload patch</button>
+<button class="copy-btn" type="button" id="op-upload-dispatch">upload + dispatch stage_patch</button>
+</div>
+<pre id="op-patch-result">idle</pre>
+</div>
+</div>
+</div>`
+    : '';
   const rows = list.length
     ? list
         .map((node) => `<tr>
@@ -914,7 +1391,7 @@ function dashboardHtml(authorized) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escHtml(anchorName)}</title>
-<meta http-equiv="refresh" content="5">
+${refreshMeta}
 <style>
 body { font-family: "JetBrains Mono", "SF Mono", Consolas, monospace; margin: 0; background: #0a0a0a; color: #fff; }
 .wrap { max-width: 1440px; margin: 24px auto; padding: 0 16px; }
@@ -942,6 +1419,14 @@ pre { border: 1px solid #2a2a2a; background: #0a0a0a; color: #ddd; padding: 8px;
 .copy-btn { border: 1px solid #3a3a3a; background: #1e1e1e; color: #fff; padding: 6px 10px; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; cursor: pointer; }
 .copy-btn:hover { background: #2a2a2a; }
 .mission { margin: 8px 0 10px 0; padding: 8px 10px; border: 1px solid #2a2a2a; background: #0d1117; color: #d1fae5; font-size: 12px; }
+.ops { margin-top: 14px; border-top: 1px solid #2a2a2a; padding-top: 12px; }
+.ops-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 10px; }
+.field-label { display: block; margin: 8px 0 4px 0; color: #bbb; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+.op-input { width: 100%; background: #0b0b0b; color: #fff; border: 1px solid #2a2a2a; padding: 8px; box-sizing: border-box; }
+.op-textarea { min-height: 110px; resize: vertical; font-family: "JetBrains Mono", "SF Mono", Consolas, monospace; font-size: 12px; }
+.node-list { max-height: 150px; overflow-y: auto; border: 1px solid #2a2a2a; background: #0b0b0b; padding: 6px; }
+.node-choice { display: block; margin: 4px 0; font-size: 12px; color: #ddd; }
+.meta-mini { color: #888; font-size: 11px; }
 </style>
 </head>
 <body>
@@ -960,7 +1445,7 @@ ${authorized ? '<div class="meta"><a href="/admin/logout">logout</a></div>' : ''
 <th>client_os</th>
 <th>platform</th>
 <th>connections</th>
-<th>current_count</th>
+<th>active_sockets</th>
 <th>trend</th>
 <th>latency</th>
 <th>severity</th>
@@ -971,6 +1456,7 @@ ${authorized ? '<div class="meta"><a href="/admin/logout">logout</a></div>' : ''
 </thead>
 <tbody>${rows}</tbody>
 </table>
+${adminOpsPanel}
 <div class="downloads">
 <h2 style="margin:14px 0 8px 0;font-size:15px;text-transform:uppercase;letter-spacing:.05em;">Connect Node</h2>
 <div class="meta">Download from this anchor or pull direct from GitHub.</div>
@@ -986,6 +1472,10 @@ ${authorized ? '<div class="meta"><a href="/admin/logout">logout</a></div>' : ''
 <div class="cmd-row"><span class="os-tag os-lin">Linux</span><code>${escHtml(cmdLinux)}</code><button class="copy-btn" type="button" data-copy-text="${escHtml(cmdLinux)}">copy</button></div>
 <div class="cmd-row"><span class="os-tag os-mac">macOS</span><code>${escHtml(cmdMac)}</code><button class="copy-btn" type="button" data-copy-text="${escHtml(cmdMac)}">copy</button></div>
 <div class="cmd-row"><span class="os-tag os-win">Windows</span><code>${escHtml(cmdWin)}</code><button class="copy-btn" type="button" data-copy-text="${escHtml(cmdWin)}">copy</button></div>
+<h3 style="margin-top:10px;">One-line Remove</h3>
+<div class="cmd-row"><span class="os-tag os-lin">Linux</span><code>${escHtml(rmCmdLinux)}</code><button class="copy-btn" type="button" data-copy-text="${escHtml(rmCmdLinux)}">copy</button></div>
+<div class="cmd-row"><span class="os-tag os-mac">macOS</span><code>${escHtml(rmCmdMac)}</code><button class="copy-btn" type="button" data-copy-text="${escHtml(rmCmdMac)}">copy</button></div>
+<div class="cmd-row"><span class="os-tag os-win">Windows</span><code>${escHtml(rmCmdWin)}</code><button class="copy-btn" type="button" data-copy-text="${escHtml(rmCmdWin)}">copy</button></div>
 </div>
 <div class="panel2">
 <h3>GitHub Source</h3>
@@ -995,6 +1485,9 @@ ${authorized ? '<div class="meta"><a href="/admin/logout">logout</a></div>' : ''
 <div><a download href="${escHtml(deployAll)}">deploy-all.sh</a></div>
 <div><a download href="${escHtml(linMonitor)}">linux connection-monitor.sh</a></div>
 <div><a download href="${escHtml(winMonitor)}">windows connection-monitor.ps1</a></div>
+<div><a download href="${escHtml(linRemoveAsset)}">linux-remove.sh</a></div>
+<div><a download href="${escHtml(macRemoveAsset)}">macos-remove.sh</a></div>
+<div><a download href="${escHtml(winRemoveAsset)}">windows-remove.ps1</a></div>
 </div>
 </div>
 </div>
@@ -1034,6 +1527,202 @@ ${authorized ? '<div class="meta"><a href="/admin/logout">logout</a></div>' : ''
     }
     setTimeout(() => { button.textContent = original; }, 1500);
   });
+
+  function selectedNodeIds() {
+    return Array.from(document.querySelectorAll('input[name="op-node"]:checked')).map((el) => el.value);
+  }
+
+  const adminStateKey = 'defendmesh_admin_ops_state_v1';
+
+  function hasAdminOps() {
+    return !!document.getElementById('op-playbook');
+  }
+
+  function collectAdminOpsState() {
+    return {
+      playbook: (document.getElementById('op-playbook') && document.getElementById('op-playbook').value) || '',
+      target: (document.getElementById('op-target') && document.getElementById('op-target').value) || '',
+      limit: (document.getElementById('op-limit') && document.getElementById('op-limit').value) || '',
+      args: (document.getElementById('op-args') && document.getElementById('op-args').value) || '',
+      patch_filename: (document.getElementById('op-patch-filename') && document.getElementById('op-patch-filename').value) || '',
+      patch_content: (document.getElementById('op-patch-content') && document.getElementById('op-patch-content').value) || '',
+      selected_nodes: selectedNodeIds()
+    };
+  }
+
+  function applyAdminOpsState(state) {
+    if (!state || typeof state !== 'object') return;
+    const setValue = (id, value) => {
+      const el = document.getElementById(id);
+      if (el && typeof value === 'string') el.value = value;
+    };
+    setValue('op-playbook', String(state.playbook || ''));
+    setValue('op-target', String(state.target || ''));
+    setValue('op-limit', String(state.limit || ''));
+    setValue('op-args', String(state.args || ''));
+    setValue('op-patch-filename', String(state.patch_filename || ''));
+    setValue('op-patch-content', String(state.patch_content || ''));
+    const selected = Array.isArray(state.selected_nodes) ? new Set(state.selected_nodes.map((v) => String(v))) : new Set();
+    for (const cb of document.querySelectorAll('input[name="op-node"]')) {
+      cb.checked = selected.has(String(cb.value || ''));
+    }
+  }
+
+  function saveAdminOpsState() {
+    if (!hasAdminOps()) return;
+    try {
+      localStorage.setItem(adminStateKey, JSON.stringify(collectAdminOpsState()));
+    } catch (_) {
+      // Ignore storage failures.
+    }
+  }
+
+  function loadAdminOpsState() {
+    if (!hasAdminOps()) return;
+    try {
+      const raw = localStorage.getItem(adminStateKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      applyAdminOpsState(parsed);
+    } catch (_) {
+      // Ignore storage failures.
+    }
+  }
+
+  function parseArgsJson() {
+    const el = document.getElementById('op-args');
+    const text = (el && el.value || '').trim();
+    if (!text) return {};
+    const parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('args JSON must be an object');
+    }
+    return parsed;
+  }
+
+  function targetPayload() {
+    const mode = (document.getElementById('op-target') && document.getElementById('op-target').value) || 'one';
+    const ids = selectedNodeIds();
+    const limitRaw = (document.getElementById('op-limit') && document.getElementById('op-limit').value || '').trim();
+    const limit = Number(limitRaw);
+    const payload = {};
+    if (mode === 'all') {
+      payload.target = 'all';
+      if (Number.isInteger(limit) && limit > 0) payload.limit = limit;
+      return payload;
+    }
+    if (mode === 'one') {
+      if (ids.length < 1) throw new Error('select one node');
+      payload.node_id = ids[0];
+      return payload;
+    }
+    if (ids.length < 1) throw new Error('select one or more nodes');
+    payload.node_ids = ids;
+    if (Number.isInteger(limit) && limit > 0) payload.limit = limit;
+    return payload;
+  }
+
+  function setOut(id, value) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = String(value);
+  }
+
+  async function postJson(path, payload) {
+    const res = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const txt = await res.text();
+    let data = null;
+    try {
+      data = JSON.parse(txt);
+    } catch (_) {
+      data = { raw: txt };
+    }
+    if (!res.ok) {
+      throw new Error((data && data.error) ? data.error : ('http_' + res.status));
+    }
+    return data;
+  }
+
+  function toBase64(text) {
+    const bytes = new TextEncoder().encode(text);
+    let binary = '';
+    for (const b of bytes) binary += String.fromCharCode(b);
+    return btoa(binary);
+  }
+
+  loadAdminOpsState();
+  if (hasAdminOps()) {
+    const saveIds = ['op-playbook', 'op-target', 'op-limit', 'op-args', 'op-patch-filename', 'op-patch-content'];
+    for (const id of saveIds) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      el.addEventListener('change', saveAdminOpsState);
+      el.addEventListener('input', saveAdminOpsState);
+    }
+    for (const cb of document.querySelectorAll('input[name="op-node"]')) {
+      cb.addEventListener('change', saveAdminOpsState);
+    }
+  }
+
+  const taskBtn = document.getElementById('op-send-task');
+  if (taskBtn) {
+    taskBtn.addEventListener('click', async () => {
+      try {
+        const playbook = (document.getElementById('op-playbook') && document.getElementById('op-playbook').value) || '';
+        if (!playbook) throw new Error('select playbook');
+        const payload = {
+          playbook,
+          args: parseArgsJson(),
+          ...targetPayload()
+        };
+        const out = await postJson('/api/v1/admin/task', payload);
+        setOut('op-task-result', JSON.stringify(out, null, 2));
+      } catch (err) {
+        setOut('op-task-result', 'error: ' + (err && err.message || err));
+      }
+    });
+  }
+
+  async function uploadPatchOnly() {
+    const name = (document.getElementById('op-patch-filename') && document.getElementById('op-patch-filename').value || '').trim();
+    const content = (document.getElementById('op-patch-content') && document.getElementById('op-patch-content').value || '');
+    if (!name) throw new Error('filename required');
+    if (!content) throw new Error('content required');
+    return postJson('/api/v1/admin/patch', { filename: name, content_b64: toBase64(content) });
+  }
+
+  const uploadBtn = document.getElementById('op-upload-patch');
+  if (uploadBtn) {
+    uploadBtn.addEventListener('click', async () => {
+      try {
+        const out = await uploadPatchOnly();
+        setOut('op-patch-result', JSON.stringify(out, null, 2));
+      } catch (err) {
+        setOut('op-patch-result', 'error: ' + (err && err.message || err));
+      }
+    });
+  }
+
+  const uploadDispatchBtn = document.getElementById('op-upload-dispatch');
+  if (uploadDispatchBtn) {
+    uploadDispatchBtn.addEventListener('click', async () => {
+      try {
+        const patch = await uploadPatchOnly();
+        const taskPayload = {
+          playbook: 'stage_patch',
+          args: { patch_id: patch.patch_id },
+          ...targetPayload()
+        };
+        const task = await postJson('/api/v1/admin/task', taskPayload);
+        setOut('op-patch-result', JSON.stringify({ patch, dispatch: task }, null, 2));
+      } catch (err) {
+        setOut('op-patch-result', 'error: ' + (err && err.message || err));
+      }
+    });
+  }
 })();
 </script>
 </body>
@@ -1115,7 +1804,10 @@ function handleHeartbeat(body, res) {
   const updatedAt = String(body.updated_at || '');
   if (!nodeId) return badRequest(res, 'node_id required');
   if (!platform) return badRequest(res, 'platform required');
-  if (!isFiniteNumber(body.current_count)) return badRequest(res, 'current_count must be number');
+  const reportedCount = isFiniteNumber(body.current_count)
+    ? body.current_count
+    : (isFiniteNumber(body.active_sockets) ? body.active_sockets : NaN);
+  if (!isFiniteNumber(reportedCount)) return badRequest(res, 'current_count or active_sockets must be number');
   if (!updatedAt || Number.isNaN(Date.parse(updatedAt))) return badRequest(res, 'updated_at must be ISO date');
 
   const existing = nodes.get(nodeId);
@@ -1123,7 +1815,7 @@ function handleHeartbeat(body, res) {
     node_id: nodeId,
     platform,
     connections_present: normalizeBool(body.connections_present),
-    current_count: body.current_count,
+    current_count: reportedCount,
     trend: normalizeTrend(body.trend),
     updated_at: updatedAt,
     _updatedMs: Date.parse(updatedAt),
@@ -1133,7 +1825,9 @@ function handleHeartbeat(body, res) {
       : Math.max(0, Date.now() - Date.parse(updatedAt))
   };
   nodes.set(nodeId, entry);
-  sendJson(res, 200, { ok: true, node_id: nodeId });
+  const latestTriage = latestFromBoundedMap(triageByNode, nodeId);
+  const autoTasks = maybeEnqueueAutoPlaybooks(nodeId, latestTriage ? latestTriage.severity : 'info');
+  sendJson(res, 200, { ok: true, node_id: nodeId, auto_tasks_queued: autoTasks.length });
 }
 
 function handleNodeLog(body, res) {
@@ -1169,7 +1863,7 @@ function handleNodeStatus(req, res, url) {
 
   const node = nodes.get(nodeId) || null;
   const profile = profilesByNode.get(nodeId) || null;
-  const triage = triageByNode.get(nodeId) || null;
+  const triage = latestFromBoundedMap(triageByNode, nodeId);
   const queued = getQueue(nodeId).length;
 
   if (!node) {
@@ -1193,6 +1887,7 @@ function handleNodeStatus(req, res, url) {
     age_sec: Math.max(0, Math.floor((nowMs - firstSeenMs) / 1000)),
     latency_ms: isFiniteNumber(node.latency_ms) ? node.latency_ms : 0,
     current_count: node.current_count,
+    active_sockets: node.current_count,
     connections_present: node.connections_present,
     trend: node.trend,
     queued_tasks: queued,
@@ -1217,7 +1912,39 @@ function handleTaskResult(body, res) {
     output: String(body.output || '')
   };
   pushBounded(resultsByNode, nodeId, item, 200);
-  sendJson(res, 200, { ok: true });
+  const taskMeta = taskMetaById.get(taskId) || null;
+  if (taskMeta) taskMetaById.delete(taskId);
+
+  const resultSeverity = status === 'error' ? 'high' : 'low';
+  const triageItem = {
+    at: item.at,
+    node_id: nodeId,
+    source: taskMeta ? `task:${taskMeta.playbook}` : 'task:unknown',
+    severity: resultSeverity,
+    summary: `Task result ${status}${taskMeta ? ` (${taskMeta.playbook})` : ''}`,
+    indicators: [],
+    counts: {}
+  };
+  pushBounded(triageByNode, nodeId, triageItem, 100);
+
+  sendJson(res, 200, { ok: true, node_id: nodeId, severity: triageItem.severity });
+
+  void (async () => {
+    try {
+      const aiResult = await aiTriageAssist(triageItem);
+      if (aiResult && aiResult.ok && aiResult.ai) {
+        triageItem.ai = aiResult.ai;
+        triageItem.severity = normalizeSeverity(aiResult.ai.severity, triageItem.severity);
+        if (aiResult.ai.summary) {
+          triageItem.summary = aiResult.ai.summary;
+        }
+      }
+      maybeEnqueueAutoPlaybooks(nodeId, triageItem.severity);
+      await dispatchThreatAlertEmail(triageItem);
+    } catch (_) {
+      // Keep node result flow resilient even if enrichment/alerts fail.
+    }
+  })();
 }
 
 function handleNodeProfile(body, res) {
@@ -1251,14 +1978,14 @@ function handleNodeEnroll(body, res) {
 
   const existing = nodeTokensByNode.get(nodeId);
   if (existing && existing.token) {
-    sendJson(res, 200, { ok: true, node_id: nodeId, token: existing.token, existing: true });
+    sendJson(res, 200, { ok: true, node_id: nodeId, existing: true, token_issued: false });
     return;
   }
 
   const token = crypto.randomBytes(24).toString('hex');
   const platform = String(body.platform || 'unknown').trim().toLowerCase().slice(0, 32);
   setNodeToken(nodeId, token, 'self-enroll', `bootstrap:${platform || 'unknown'}`);
-  sendJson(res, 200, { ok: true, node_id: nodeId, token, existing: false });
+  sendJson(res, 200, { ok: true, node_id: nodeId, token, existing: false, token_issued: true });
 }
 
 function handleNodeTriage(body, res) {
@@ -1267,7 +1994,7 @@ function handleNodeTriage(body, res) {
   if (!nodeId) return badRequest(res, 'node_id required');
 
   const severityRaw = String(body.severity || 'info').trim().toLowerCase();
-  const severity = ['info', 'low', 'medium', 'high', 'critical'].includes(severityRaw) ? severityRaw : 'info';
+  const severity = normalizeSeverity(severityRaw, 'info');
   const indicators = Array.isArray(body.indicators) ? body.indicators.slice(0, 200) : [];
   const counts = body.counts && typeof body.counts === 'object' ? body.counts : {};
   const summary = String(body.summary || '').slice(0, 2000);
@@ -1284,7 +2011,25 @@ function handleNodeTriage(body, res) {
     counts
   };
   pushBounded(triageByNode, nodeId, item, 100);
-  sendJson(res, 200, { ok: true, node_id: nodeId, severity });
+  const autoTasks = maybeEnqueueAutoPlaybooks(nodeId, item.severity);
+  sendJson(res, 200, { ok: true, node_id: nodeId, severity: item.severity, auto_tasks_queued: autoTasks.length });
+
+  void (async () => {
+    try {
+      const aiResult = await aiTriageAssist(item);
+      if (aiResult && aiResult.ok && aiResult.ai) {
+        item.ai = aiResult.ai;
+        item.severity = normalizeSeverity(aiResult.ai.severity, item.severity);
+        if (aiResult.ai.summary) {
+          item.summary = aiResult.ai.summary;
+        }
+      }
+      maybeEnqueueAutoPlaybooks(nodeId, item.severity);
+      await dispatchThreatAlertEmail(item);
+    } catch (_) {
+      // Keep triage ingestion available even if async enrichment fails.
+    }
+  })();
 }
 
 function knownNodeIds() {
@@ -1360,16 +2105,7 @@ function handleAdminTask(body, adminEmail, res) {
   const createdAt = new Date().toISOString();
   const tasks = [];
   for (const nodeId of resolved.targets) {
-    const task = {
-      task_id: makeTaskId(),
-      dispatch_id: dispatchId,
-      node_id: nodeId,
-      playbook,
-      args,
-      created_at: createdAt,
-      created_by: adminEmail
-    };
-    getQueue(nodeId).push(task);
+    const task = enqueueTask(nodeId, playbook, args, adminEmail, dispatchId, createdAt);
     tasks.push({ task_id: task.task_id, node_id: task.node_id });
   }
 
@@ -1588,10 +2324,48 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === 'GET' && url.pathname === '/download/remove/linux') {
+    sendText(res, 200, downloadRemoveLinuxScript(), 'defendmesh-remove-linux.sh');
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/download/remove/macos') {
+    sendText(res, 200, downloadRemoveMacosScript(), 'defendmesh-remove-macos.sh');
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/download/remove/windows') {
+    sendText(res, 200, downloadRemoveWindowsScript(), 'defendmesh-remove-windows.ps1');
+    return;
+  }
+
   if (req.method === 'GET' && url.pathname.startsWith('/download/asset/')) {
     const name = decodeURIComponent(url.pathname.replace('/download/asset/', '')).trim();
+    if (name === 'linux-remove.sh') {
+      sendText(res, 200, downloadRemoveLinuxScript(), name);
+      return;
+    }
+    if (name === 'macos-remove.sh') {
+      sendText(res, 200, downloadRemoveMacosScript(), name);
+      return;
+    }
+    if (name === 'windows-remove.ps1') {
+      sendText(res, 200, downloadRemoveWindowsScript(), name);
+      return;
+    }
     const assetMap = downloadAssetMap();
+    const localMap = downloadLocalAssetMap();
     const sourceUrl = assetMap[name];
+    const localPath = localMap[name];
+    if (localPath && fs.existsSync(localPath)) {
+      try {
+        const content = fs.readFileSync(localPath, 'utf8');
+        sendText(res, 200, content, name);
+        return;
+      } catch (_) {
+        // Fall through to remote fetch attempt.
+      }
+    }
     if (!sourceUrl) {
       notFound(res);
       return;
@@ -1600,6 +2374,15 @@ const server = http.createServer(async (req, res) => {
       const content = await fetchRemoteText(sourceUrl);
       sendText(res, 200, content, name);
     } catch (_) {
+      if (localPath && fs.existsSync(localPath)) {
+        try {
+          const content = fs.readFileSync(localPath, 'utf8');
+          sendText(res, 200, content, name);
+          return;
+        } catch (_) {
+          // Continue to 502.
+        }
+      }
       sendJson(res, 502, { error: 'download_unavailable' });
     }
     return;
@@ -1678,6 +2461,18 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       handleTaskResult(body, res);
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/v1/node/triage') {
+      let body;
+      try {
+        body = await parseJsonBody(req);
+      } catch (err) {
+        badRequest(res, err.message || 'invalid request body');
+        return;
+      }
+      handleNodeTriage(body, res);
       return;
     }
 

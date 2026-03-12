@@ -8,9 +8,23 @@ Use `anchor/` as the central control plane exposed on `defend.ordl.org` via tunn
 
 - Operators authenticate with Zero Trust email login (for example `.gov` / `.mil` / org domains).
 - Nodes send heartbeat/logs over outbound HTTPS.
-- Operators queue approved defensive playbooks and patch bundles through anchor APIs.
+- Anchor auto-queues defensive baseline playbooks (audit + monitor) and can auto-remediate on configured severity.
+- Triage events can be enriched by an OpenAI-compatible model for defensive assistance.
+- Operators queue approved defensive playbooks and stage signed patch bundles through anchor APIs (arbitrary remote script execution is intentionally disabled).
 
 See [`anchor/README.md`](./anchor/README.md).
+
+## Anchor Download + Removal
+
+Connect node (one-line):
+- Linux: `curl -fsSL https://defend.ordl.org/download/linux | bash`
+- macOS: `curl -fsSL https://defend.ordl.org/download/macos | bash`
+- Windows: `powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr -UseBasicParsing https://defend.ordl.org/download/windows -OutFile $env:TEMP\defendmesh.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\defendmesh.ps1"`
+
+Remove node tooling (one-line):
+- Linux: `curl -fsSL https://defend.ordl.org/download/remove/linux | bash`
+- macOS: `curl -fsSL https://defend.ordl.org/download/remove/macos | bash`
+- Windows: `powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr -UseBasicParsing https://defend.ordl.org/download/remove/windows -OutFile $env:TEMP\defendmesh-remove.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\defendmesh-remove.ps1"`
 
 ## Point-and-Click (Windows)
 
@@ -131,7 +145,7 @@ Realtime monitors also write a live dashboard in:
 
 Realtime dashboard displays:
 - `Connections Present: YES/NO`
-- current count
+- active sockets (live socket count sampled from `ss`/`netstat`)
 - trend (`UP`, `DOWN`, `STEADY`)
 - recent timestamped count history
 
