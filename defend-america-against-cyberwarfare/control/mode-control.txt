@@ -1,0 +1,6 @@
+# Defend control file
+# Valid modes: audit | remediate
+# If DEFEND_CONTROL_TOKEN is set on the host, token must match.
+
+mode:audit
+# token:CHANGE_ME

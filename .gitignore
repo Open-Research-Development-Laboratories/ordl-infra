@@ -1,0 +1,10 @@
+# Local infra scratch / non-repo artifacts
+BOOTSTRAP.md
+Intelligence/
+Research/
+docs/
+memory/
+output/
+
+# RHEL image workbench
+images/rhel/

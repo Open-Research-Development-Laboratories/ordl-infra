@@ -1,0 +1,12 @@
+# IOC template (no live intel bundled)
+# One IOC per line:
+# path:C:\absolute\path\file.exe
+# sha256:lowercasehexhash
+# name:process_or_file_name.exe
+# ip:203.0.113.10
+
+# Example placeholders:
+# name:badprocess.exe
+# path:C:\Users\Public\badprocess.exe
+# sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+# ip:198.51.100.25
