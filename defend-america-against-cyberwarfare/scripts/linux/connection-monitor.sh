@@ -47,7 +47,29 @@ DASHBOARD_HTML="$OUTPUT_DIR/dashboard.html"
 LIVE_JSON="$OUTPUT_DIR/live.json"
 MONITOR_LOG="$OUTPUT_DIR/monitor.log"
 HISTORY_CSV="$OUTPUT_DIR/.history.csv"
+LOCK_FILE="$OUTPUT_DIR/monitor.lock"
+PID_FILE="$OUTPUT_DIR/monitor.pid"
 : > "$HISTORY_CSV"
+
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"$LOCK_FILE"
+  if ! flock -n 9; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] monitor already running; skipping duplicate launch" | tee -a "$MONITOR_LOG"
+    exit 0
+  fi
+else
+  if [ -f "$PID_FILE" ]; then
+    old_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+    if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] monitor already running pid=$old_pid; skipping duplicate launch" | tee -a "$MONITOR_LOG"
+      exit 0
+    fi
+  fi
+fi
+
+printf '%s\n' "$$" > "$PID_FILE"
+cleanup_pid() { rm -f "$PID_FILE"; }
+trap cleanup_pid EXIT INT TERM
 
 get_connection_count() {
   if command -v ss >/dev/null 2>&1; then
