@@ -1,23 +1,16 @@
-# PUBLIC PLACEHOLDER - PROPRIETARY INTERNAL INSTRUCTIONS NOT INCLUDED IN THIS PUBLIC REPOSITORY
-## Public summary
+# ORDL Infrastructure (Public Placeholder)
 
-Path:
-- `README.md`
+This repository is a public-safe placeholder. Proprietary operating instructions,
+research corpus, orchestration rules, and implementation details are intentionally
+withheld.
 
-Status:
-- Public-safe placeholder.
-- The full operating instructions, research corpus, orchestration rules, and implementation details are proprietary and intentionally withheld.
+## Start Here
 
-What The Private Version Generally Covers:
-- This public file explains the release shape of the repository without exposing proprietary internals.
+- [BOOTSTRAP.md](BOOTSTRAP.md) is the canonical public map of repository topology and load order.
+- This `README.md` is a short orientation page only.
 
-Public Example:
-- Public example: this repo shows structure, naming, load order, and design intent while withholding the actual operating corpus.
+## Public Scope
 
-Why This File Still Exists:
-- Preserves repository structure and expected load order.
-- Keeps the public topology aligned with [BOOTSTRAP.md](BOOTSTRAP.md).
-
-Public Design Signals:
-- MCP-first when an integration surface applies.
-- Fleet-first for non-trivial execution.
+- Shows structure, naming, and design intent.
+- Preserves expected document load order without exposing private internals.
+- Signals MCP-first integration preference and fleet-first execution preference.

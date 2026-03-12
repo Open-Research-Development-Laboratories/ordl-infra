@@ -7,6 +7,7 @@ const bind = process.env.ANCHOR_BIND || '0.0.0.0';
 const parsedPort = Number(process.env.ANCHOR_PORT || 8787);
 const port = Number.isInteger(parsedPort) && parsedPort > 0 && parsedPort < 65536 ? parsedPort : 8787;
 const anchorName = process.env.ANCHOR_NAME || 'DefendMesh Anchor';
+const publicUrl = process.env.ANCHOR_PUBLIC_URL || 'https://defend.ordl.org';
 
 const nodeBearerToken = process.env.ANCHOR_NODE_TOKEN || '';
 const cfServiceId = process.env.ANCHOR_CF_SERVICE_TOKEN_ID || '';
@@ -239,7 +240,8 @@ code { background: #8882; padding: 2px 4px; border-radius: 4px; }
 <body>
 <h1>${escHtml(anchorName)}</h1>
 <small>Auto-refresh 5s. Nodes: ${list.length}. UTC: ${new Date(now).toISOString()}</small>
-<p>Zero Trust admin: <code>cf-access-authenticated-user-email</code> with allowed suffixes: ${escHtml(allowedSuffixes.join(', '))}</p>
+<p>Connection Route: <a href="${escHtml(publicUrl)}">${escHtml(publicUrl)}</a></p>
+<p>Backend/Admin Access: approved identity email required (example domains: ${escHtml(allowedSuffixes.join(', '))})</p>
 <table>
 <thead>
 <tr>

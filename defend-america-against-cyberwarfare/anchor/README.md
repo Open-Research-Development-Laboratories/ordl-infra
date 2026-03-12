@@ -21,6 +21,7 @@ Core:
 - `ANCHOR_BIND` (default `0.0.0.0`)
 - `ANCHOR_PORT` (default `8787`)
 - `ANCHOR_NAME` (default `DefendMesh Anchor`)
+- `ANCHOR_PUBLIC_URL` (default `https://defend.ordl.org`, shown on dashboard)
 
 Node auth (choose one or both):
 - `ANCHOR_NODE_TOKEN` (bearer token expected from nodes)
