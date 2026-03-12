@@ -1420,17 +1420,26 @@ function renderNodes(nodes, authorized) {
 function dashboardHtml(authorized) {
   const now = Date.now();
   const list = renderNodes(asNodeSnapshot(now), authorized);
-  const flagAscii = [
-    '***************==============================',
-    '***************==============================',
-    '***************==============================',
-    '***************==============================',
-    '***************==============================',
-    '=============================================',
-    '=============================================',
-    '=============================================',
-    '=============================================',
-    '============================================='
+  const ordlAscii = [
+    '█░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▓',
+    '░                                        ░',
+    '░          ░▒▓█·-·01001111·-·█▓▒░        ░',
+    '░       ░▓█▒ -·01010010·-▒█▓░            ░',
+    '░     ░█▒  -·01000100·-▒█░               ░',
+    '░    █░ -·01001100·-░█                   ░',
+    '░   █·-·01000110·-·█                     ░',
+    '░  █·-·01001111·-·█                      ░',
+    '░ ░█·-·01010010·-·█░                     ░',
+    '░ ░█·-·01010100·-·█░                     ░',
+    '░  █·-·01010010·-·█                      ░',
+    '░  █·-·01000101·-·█                      ░',
+    '░   █·-·01010011·-·█                     ░',
+    '░    █·-·01010011·-·█                    ░',
+    '░     ░█·-·00101101·-█░                  ░',
+    '░       ░▓█·-·01001111·-█▓░              ░',
+    '░          ░▒▓█·-·-·-·█▓▒░               ░',
+    '░                                        ░',
+    '█░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▓'
   ].join('\n');
   const gitBase = githubBaseUrl();
   const linuxDl = `${publicUrlBase}/download/linux`;
@@ -1535,7 +1544,7 @@ function dashboardHtml(authorized) {
 <title>${escHtml(anchorName)}</title>
 ${refreshMeta}
 <style>
-body { font-family: "JetBrains Mono", "SF Mono", Consolas, monospace; margin: 0; background: #0a0a0a; color: #fff; }
+body { font-family: "JetBrains Mono", "SF Mono", Consolas, monospace; margin: 0; background: linear-gradient(180deg, #f6efdf 0%, #f1e9d7 8%, #2a2823 28%, #0a0a0a 58%, #050505 100%); color: #f5f5f5; }
 .wrap { max-width: 1440px; margin: 24px auto; padding: 0 16px; }
 .panel { border: 1px solid #2a2a2a; background: #111; border-radius: 0; padding: 14px; }
 h1 { margin: 0 0 6px 0; font-size: 20px; letter-spacing: .04em; text-transform: uppercase; }
@@ -1560,7 +1569,12 @@ pre { border: 1px solid #2a2a2a; background: #0a0a0a; color: #ddd; padding: 8px;
 .cmd-row code { display: block; white-space: nowrap; overflow-x: auto; color: #e8e8e8; font-size: 11px; flex: 1 1 auto; }
 .copy-btn { border: 1px solid #3a3a3a; background: #1e1e1e; color: #fff; padding: 6px 10px; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; cursor: pointer; }
 .copy-btn:hover { background: #2a2a2a; }
-.flag { margin: 8px auto 10px auto; max-width: 520px; text-align: center; color: #c7d2fe; background: #0b1220; border: 1px solid #2a2a2a; padding: 8px; white-space: pre; font-size: 11px; line-height: 1.25; }
+.hero-mark { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; margin: 8px 0 12px 0; }
+.ordl-logo { margin: 0; max-width: 760px; text-align: center; color: #f8efdb; background: transparent; border: 0; box-shadow: none; padding: 0; white-space: pre; font-size: 11px; line-height: 1.15; text-shadow: 0 0 10px rgba(248, 239, 219, .14); }
+.ordl-wordmark { font-size: 44px; letter-spacing: .14em; text-transform: uppercase; text-decoration: none; color: #f8efdb; line-height: 1; font-weight: 700; text-shadow: 0 0 14px rgba(248, 239, 219, .2); margin: 2px 0 0 0; }
+.ordl-wordmark:hover { color: #fff8ec; text-decoration: none; }
+.ai-stream { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 0; }
+.ai-title { font-size: 13px; letter-spacing: .18em; text-transform: uppercase; color: #f0e2c8; }
 .mission { margin: 8px 0 10px 0; padding: 8px 10px; border: 1px solid #2a2a2a; background: #0d1117; color: #d1fae5; font-size: 12px; }
 .ops { margin-top: 14px; border-top: 1px solid #2a2a2a; padding-top: 12px; }
 .ops-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 10px; }
@@ -1577,7 +1591,13 @@ pre { border: 1px solid #2a2a2a; background: #0a0a0a; color: #ddd; padding: 8px;
 <div class="panel">
 <h1>${escHtml(anchorName)}</h1>
 <div class="meta">route=${escHtml(publicUrl)} | auth_view=${authorized ? 'authorized_real' : 'public_spoofed'} | nodes=${list.length} | est=${escHtml(formatEstMinus5(now))}</div>
-<pre class="flag">${escHtml(flagAscii)}</pre>
+<div class="hero-mark">
+<a class="ordl-wordmark" href="https://ordl.org" target="_blank" rel="noopener noreferrer">ORDL</a>
+<pre class="ordl-logo">${escHtml(ordlAscii)}</pre>
+<div class="ai-stream">
+<div class="ai-title">United States of America</div>
+</div>
+</div>
 <div class="mission">${escHtml(missionStatement)}</div>
 ${authorized ? '<div class="meta"><a href="/admin/logout">logout</a></div>' : ''}
 <table>
