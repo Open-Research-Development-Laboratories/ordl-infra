@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const http = require('node:http');
 const https = require('node:https');
 const net = require('node:net');
+const path = require('node:path');
 const tls = require('node:tls');
 
 const bind = process.env.ANCHOR_BIND || '0.0.0.0';
@@ -14,6 +15,7 @@ const anchorName = process.env.ANCHOR_NAME || 'DefendMesh Anchor';
 const publicUrl = process.env.ANCHOR_PUBLIC_URL || 'https://defend.ordl.org';
 const publicUrlBase = publicUrl.replace(/\/+$/, '');
 const nodeTokensFile = process.env.ANCHOR_NODE_TOKENS_FILE || './node-tokens.json';
+const patchStoreDir = process.env.ANCHOR_PATCH_STORE_DIR || './patch-store';
 const githubRepo = (process.env.ANCHOR_GITHUB_REPO || 'https://github.com/Open-Research-Development-Laboratories/ordl-infra.git').trim();
 const githubRef = (process.env.ANCHOR_GITHUB_REF || 'main').trim();
 
@@ -90,7 +92,8 @@ const PLAYBOOKS = new Set([
   'monitor_start',
   'monitor_stop',
   'monitor_oneshot',
-  'stage_patch'
+  'stage_patch',
+  'operator_notice'
 ]);
 
 function saveNodeTokens() {
@@ -1081,6 +1084,8 @@ function downloadAssetMap() {
     'deploy-all.sh': `${rawBase}/scripts/deploy/deploy-all.sh`,
     'linux-connection-monitor.sh': `${rawBase}/scripts/linux/connection-monitor.sh`,
     'windows-connection-monitor.ps1': `${rawBase}/scripts/windows/connection-monitor.ps1`,
+    'linux-node-agent.sh': `${rawBase}/scripts/linux/node-agent.sh`,
+    'windows-node-agent.ps1': `${rawBase}/scripts/windows/node-agent.ps1`,
     'linux-remove.sh': `${rawBase}/scripts/remove/linux-remove.sh`,
     'macos-remove.sh': `${rawBase}/scripts/remove/macos-remove.sh`,
     'windows-remove.ps1': `${rawBase}/scripts/remove/windows-remove.ps1`
@@ -1088,11 +1093,13 @@ function downloadAssetMap() {
 }
 
 function downloadLocalAssetMap() {
-  const repoBase = `${__dirname}/..`;
+  const repoBase = `${__dirname}`;
   return {
     'deploy-all.sh': `${repoBase}/scripts/deploy/deploy-all.sh`,
     'linux-connection-monitor.sh': `${repoBase}/scripts/linux/connection-monitor.sh`,
     'windows-connection-monitor.ps1': `${repoBase}/scripts/windows/connection-monitor.ps1`,
+    'linux-node-agent.sh': `${repoBase}/scripts/linux/node-agent.sh`,
+    'windows-node-agent.ps1': `${repoBase}/scripts/windows/node-agent.ps1`,
     'linux-remove.sh': `${repoBase}/scripts/remove/linux-remove.sh`,
     'macos-remove.sh': `${repoBase}/scripts/remove/macos-remove.sh`,
     'windows-remove.ps1': `${repoBase}/scripts/remove/windows-remove.ps1`
@@ -1133,26 +1140,39 @@ function fetchRemoteText(url) {
 }
 
 function downloadLinuxScript() {
-  const rawBase = githubRawBasePath();
-  const monitorUrl = `${rawBase}/scripts/linux/connection-monitor.sh`;
+  const monitorUrl = `${publicUrlBase}/download/asset/linux-connection-monitor.sh`;
+  const agentUrl = `${publicUrlBase}/download/asset/linux-node-agent.sh`;
   return `#!/usr/bin/env bash
 set -euo pipefail
 ANCHOR_URL="\${DEFEND_ANCHOR_URL:-${publicUrlBase}}"
 NODE_ID="\${DEFEND_NODE_ID:-$(hostname 2>/dev/null || echo node-linux)}"
-OUTPUT_DIR="\${DEFEND_OUTPUT_DIR:-\${HOME:-/tmp}/.defendmesh/output/live-dashboard}"
+ROOT_DIR="\${DEFEND_ROOT_DIR:-\${HOME:-/tmp}/.defendmesh}"
+MONITOR_OUT="\${DEFEND_MONITOR_OUTPUT_DIR:-$ROOT_DIR/live-dashboard}"
+AGENT_OUT="\${DEFEND_AGENT_OUTPUT_DIR:-$ROOT_DIR/node-agent}"
 WORK_DIR="\${TMPDIR:-/tmp}/defendmesh-bootstrap"
 MONITOR="$WORK_DIR/connection-monitor.sh"
-PID_FILE="$OUTPUT_DIR/monitor.pid"
-mkdir -p "$WORK_DIR" "$OUTPUT_DIR"
-if command -v curl >/dev/null 2>&1; then
-  curl -fsSL "${monitorUrl}" -o "$MONITOR"
-elif command -v wget >/dev/null 2>&1; then
-  wget -q -O "$MONITOR" "${monitorUrl}"
-else
-  echo "need curl or wget" >&2
-  exit 1
-fi
-chmod +x "$MONITOR"
+AGENT="$WORK_DIR/node-agent.sh"
+MON_PID_FILE="$MONITOR_OUT/monitor.pid"
+AGENT_PID_FILE="$AGENT_OUT/node-agent.pid"
+mkdir -p "$WORK_DIR" "$MONITOR_OUT" "$AGENT_OUT"
+
+download_file() {
+  local url="$1"
+  local out="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$url" -o "$out"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -O "$out" "$url"
+  else
+    echo "need curl or wget" >&2
+    exit 1
+  fi
+}
+
+download_file "${monitorUrl}" "$MONITOR"
+download_file "${agentUrl}" "$AGENT"
+chmod +x "$MONITOR" "$AGENT"
+
 ANCHOR_TOKEN="\${DEFEND_ANCHOR_TOKEN:-}"
 if [ -z "$ANCHOR_TOKEN" ]; then
   ENROLL_URL="\${ANCHOR_URL%/}/api/v1/node/enroll"
@@ -1166,21 +1186,48 @@ if [ -z "$ANCHOR_TOKEN" ]; then
     ANCHOR_TOKEN="$(printf '%s' "$ENROLL_RESP" | sed -n 's/.*"token":"\\([^"]*\\)".*/\\1/p' | head -n 1)"
   fi
 fi
-MON_ARGS=(--anchor-url "$ANCHOR_URL" --node-id "$NODE_ID" --output-dir "$OUTPUT_DIR")
+
+MON_ARGS=(--anchor-url "$ANCHOR_URL" --node-id "$NODE_ID" --output-dir "$MONITOR_OUT")
+AGENT_ARGS=(--anchor-url "$ANCHOR_URL" --node-id "$NODE_ID" --output-dir "$AGENT_OUT")
 if [ -n "$ANCHOR_TOKEN" ]; then
   MON_ARGS+=(--anchor-token "$ANCHOR_TOKEN")
+  AGENT_ARGS+=(--anchor-token "$ANCHOR_TOKEN")
 fi
-if [ -f "$PID_FILE" ]; then
-  RUN_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
+
+if [ -f "$MON_PID_FILE" ]; then
+  RUN_PID="$(cat "$MON_PID_FILE" 2>/dev/null || true)"
   if [ -n "$RUN_PID" ] && kill -0 "$RUN_PID" 2>/dev/null; then
-    echo "monitor already running pid=$RUN_PID node=$NODE_ID; skipping duplicate launch"
-    exit 0
+    echo "monitor already running pid=$RUN_PID node=$NODE_ID"
+  else
+    nohup "$MONITOR" "\${MON_ARGS[@]}" > "$MONITOR_OUT/monitor-stdout.log" 2>&1 &
+    MON_PID="$!"
+    printf '%s\n' "$MON_PID" > "$MON_PID_FILE"
+    echo "started monitor pid=$MON_PID node=$NODE_ID anchor=$ANCHOR_URL output=$MONITOR_OUT"
   fi
+else
+  nohup "$MONITOR" "\${MON_ARGS[@]}" > "$MONITOR_OUT/monitor-stdout.log" 2>&1 &
+  MON_PID="$!"
+  printf '%s\n' "$MON_PID" > "$MON_PID_FILE"
+  echo "started monitor pid=$MON_PID node=$NODE_ID anchor=$ANCHOR_URL output=$MONITOR_OUT"
 fi
-nohup "$MONITOR" "\${MON_ARGS[@]}" > "$OUTPUT_DIR/monitor-stdout.log" 2>&1 &
-PID="$!"
-printf '%s\n' "$PID" > "$PID_FILE"
-echo "started monitor pid=$PID node=$NODE_ID anchor=$ANCHOR_URL output=$OUTPUT_DIR"
+
+if [ -f "$AGENT_PID_FILE" ]; then
+  RUN_PID="$(cat "$AGENT_PID_FILE" 2>/dev/null || true)"
+  if [ -n "$RUN_PID" ] && kill -0 "$RUN_PID" 2>/dev/null; then
+    echo "node-agent already running pid=$RUN_PID node=$NODE_ID"
+  else
+    nohup "$AGENT" "\${AGENT_ARGS[@]}" > "$AGENT_OUT/node-agent-stdout.log" 2>&1 &
+    AGENT_PID="$!"
+    printf '%s\n' "$AGENT_PID" > "$AGENT_PID_FILE"
+    echo "started node-agent pid=$AGENT_PID node=$NODE_ID anchor=$ANCHOR_URL output=$AGENT_OUT"
+  fi
+else
+  nohup "$AGENT" "\${AGENT_ARGS[@]}" > "$AGENT_OUT/node-agent-stdout.log" 2>&1 &
+  AGENT_PID="$!"
+  printf '%s\n' "$AGENT_PID" > "$AGENT_PID_FILE"
+  echo "started node-agent pid=$AGENT_PID node=$NODE_ID anchor=$ANCHOR_URL output=$AGENT_OUT"
+fi
+
 if [ -n "$ANCHOR_TOKEN" ]; then
   echo "anchor token auto-provisioned"
 else
@@ -1194,19 +1241,25 @@ function downloadMacosScript() {
 }
 
 function downloadWindowsScript() {
-  const rawBase = githubRawBasePath();
-  const monitorUrl = `${rawBase}/scripts/windows/connection-monitor.ps1`;
+  const monitorUrl = `${publicUrlBase}/download/asset/windows-connection-monitor.ps1`;
+  const agentUrl = `${publicUrlBase}/download/asset/windows-node-agent.ps1`;
   return `$ErrorActionPreference = 'Stop'
 $AnchorUrl = if ($env:DEFEND_ANCHOR_URL) { $env:DEFEND_ANCHOR_URL } else { '${publicUrlBase}' }
 $NodeId = if ($env:DEFEND_NODE_ID) { $env:DEFEND_NODE_ID } else { $env:COMPUTERNAME }
-$OutputDir = if ($env:DEFEND_OUTPUT_DIR) { $env:DEFEND_OUTPUT_DIR } else { Join-Path $env:USERPROFILE '.defendmesh\\output\\live-dashboard' }
+$RootDir = if ($env:DEFEND_ROOT_DIR) { $env:DEFEND_ROOT_DIR } else { Join-Path $env:USERPROFILE '.defendmesh' }
+$MonitorOut = if ($env:DEFEND_MONITOR_OUTPUT_DIR) { $env:DEFEND_MONITOR_OUTPUT_DIR } else { Join-Path $RootDir 'live-dashboard' }
+$AgentOut = if ($env:DEFEND_AGENT_OUTPUT_DIR) { $env:DEFEND_AGENT_OUTPUT_DIR } else { Join-Path $RootDir 'node-agent' }
 $AnchorToken = $env:DEFEND_ANCHOR_TOKEN
 $TmpRoot = Join-Path $env:TEMP 'defendmesh-bootstrap'
 $MonitorPath = Join-Path $TmpRoot 'connection-monitor.ps1'
-$PidFile = Join-Path $OutputDir 'monitor.pid'
+$AgentPath = Join-Path $TmpRoot 'node-agent.ps1'
+$MonPidFile = Join-Path $MonitorOut 'monitor.pid'
+$AgentPidFile = Join-Path $AgentOut 'node-agent.pid'
 New-Item -ItemType Directory -Path $TmpRoot -Force | Out-Null
-New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+New-Item -ItemType Directory -Path $MonitorOut -Force | Out-Null
+New-Item -ItemType Directory -Path $AgentOut -Force | Out-Null
 Invoke-WebRequest -UseBasicParsing -Uri '${monitorUrl}' -OutFile $MonitorPath
+Invoke-WebRequest -UseBasicParsing -Uri '${agentUrl}' -OutFile $AgentPath
 if ([string]::IsNullOrWhiteSpace($AnchorToken)) {
   try {
     $EnrollBody = @{ node_id = $NodeId; platform = 'windows' } | ConvertTo-Json -Compress
@@ -1214,27 +1267,43 @@ if ([string]::IsNullOrWhiteSpace($AnchorToken)) {
     if ($Enroll -and $Enroll.token) { $AnchorToken = [string]$Enroll.token }
   } catch {}
 }
-$args = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$MonitorPath,'-AnchorUrl',$AnchorUrl,'-NodeId',$NodeId,'-OutputDir',$OutputDir)
-if (-not [string]::IsNullOrWhiteSpace($AnchorToken)) { $args += @('-AnchorToken',$AnchorToken) }
-if (Test-Path -LiteralPath $PidFile) {
+$monArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$MonitorPath,'-AnchorUrl',$AnchorUrl,'-NodeId',$NodeId,'-OutputDir',$MonitorOut)
+if (-not [string]::IsNullOrWhiteSpace($AnchorToken)) { $monArgs += @('-AnchorToken',$AnchorToken) }
+if (Test-Path -LiteralPath $MonPidFile) {
   try {
-    $existingPid = [int](Get-Content -LiteralPath $PidFile -ErrorAction Stop | Select-Object -First 1)
+    $existingPid = [int](Get-Content -LiteralPath $MonPidFile -ErrorAction Stop | Select-Object -First 1)
     if (Get-Process -Id $existingPid -ErrorAction SilentlyContinue) {
-      Write-Output ('monitor already running pid=' + $existingPid + ' node=' + $NodeId + '; skipping duplicate launch')
-      exit 0
+      Write-Output ('monitor already running pid=' + $existingPid + ' node=' + $NodeId)
+    } else {
+      $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList $monArgs -WindowStyle Hidden -PassThru
+      [string]$proc.Id | Set-Content -LiteralPath $MonPidFile -Encoding ASCII
+      Write-Output ('started monitor pid=' + $proc.Id + ' node=' + $NodeId + ' anchor=' + $AnchorUrl + ' output=' + $MonitorOut)
     }
   } catch {}
+} else {
+  $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList $monArgs -WindowStyle Hidden -PassThru
+  [string]$proc.Id | Set-Content -LiteralPath $MonPidFile -Encoding ASCII
+  Write-Output ('started monitor pid=' + $proc.Id + ' node=' + $NodeId + ' anchor=' + $AnchorUrl + ' output=' + $MonitorOut)
 }
-$existingProc = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-  $_.CommandLine -like '*connection-monitor.ps1*' -and $_.CommandLine -like ('*-NodeId*' + $NodeId + '*')
-} | Select-Object -First 1
-if ($existingProc) {
-  Write-Output ('monitor already running pid=' + $existingProc.ProcessId + ' node=' + $NodeId + '; skipping duplicate launch')
-  exit 0
+
+$agentArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$AgentPath,'-AnchorUrl',$AnchorUrl,'-NodeId',$NodeId,'-OutputDir',$AgentOut)
+if (-not [string]::IsNullOrWhiteSpace($AnchorToken)) { $agentArgs += @('-AnchorToken',$AnchorToken) }
+if (Test-Path -LiteralPath $AgentPidFile) {
+  try {
+    $existingAgentPid = [int](Get-Content -LiteralPath $AgentPidFile -ErrorAction Stop | Select-Object -First 1)
+    if (Get-Process -Id $existingAgentPid -ErrorAction SilentlyContinue) {
+      Write-Output ('node-agent already running pid=' + $existingAgentPid + ' node=' + $NodeId)
+    } else {
+      $agentProc = Start-Process -FilePath 'powershell.exe' -ArgumentList $agentArgs -WindowStyle Hidden -PassThru
+      [string]$agentProc.Id | Set-Content -LiteralPath $AgentPidFile -Encoding ASCII
+      Write-Output ('started node-agent pid=' + $agentProc.Id + ' node=' + $NodeId + ' anchor=' + $AnchorUrl + ' output=' + $AgentOut)
+    }
+  } catch {}
+} else {
+  $agentProc = Start-Process -FilePath 'powershell.exe' -ArgumentList $agentArgs -WindowStyle Hidden -PassThru
+  [string]$agentProc.Id | Set-Content -LiteralPath $AgentPidFile -Encoding ASCII
+  Write-Output ('started node-agent pid=' + $agentProc.Id + ' node=' + $NodeId + ' anchor=' + $AnchorUrl + ' output=' + $AgentOut)
 }
-$proc = Start-Process -FilePath 'powershell.exe' -ArgumentList $args -WindowStyle Hidden -PassThru
-[string]$proc.Id | Set-Content -LiteralPath $PidFile -Encoding ASCII
-Write-Output ('started monitor pid=' + $proc.Id + ' node=' + $NodeId + ' anchor=' + $AnchorUrl + ' output=' + $OutputDir)
 `;
 }
 
@@ -1306,6 +1375,8 @@ function dashboardHtml(authorized) {
   const winRmDl = `${publicUrlBase}/download/remove/windows`;
   const winMonitor = `${publicUrlBase}/download/asset/windows-connection-monitor.ps1`;
   const linMonitor = `${publicUrlBase}/download/asset/linux-connection-monitor.sh`;
+  const linAgent = `${publicUrlBase}/download/asset/linux-node-agent.sh`;
+  const winAgent = `${publicUrlBase}/download/asset/windows-node-agent.ps1`;
   const linRemoveAsset = `${publicUrlBase}/download/asset/linux-remove.sh`;
   const macRemoveAsset = `${publicUrlBase}/download/asset/macos-remove.sh`;
   const winRemoveAsset = `${publicUrlBase}/download/asset/windows-remove.ps1`;
@@ -1347,7 +1418,12 @@ function dashboardHtml(authorized) {
 <div class="node-list" id="op-node-list">${nodeChoices}</div>
 <label class="field-label" for="op-args">Args JSON (object)</label>
 <textarea id="op-args" class="op-input op-textarea" placeholder='{"interval_sec":2}'></textarea>
+<div style="display:flex;gap:8px;flex-wrap:wrap;">
 <button class="copy-btn" type="button" id="op-send-task">send task</button>
+</div>
+<label class="field-label" for="op-notice-message">Operator Notice Popup Message</label>
+<input id="op-notice-message" class="op-input" type="text" placeholder="DefendMesh notice: patch staged on this node.">
+<button class="copy-btn" type="button" id="op-send-notice">send notice popup</button>
 <pre id="op-task-result">idle</pre>
 </div>
 <div class="panel2">
@@ -1485,6 +1561,8 @@ ${adminOpsPanel}
 <div><a download href="${escHtml(deployAll)}">deploy-all.sh</a></div>
 <div><a download href="${escHtml(linMonitor)}">linux connection-monitor.sh</a></div>
 <div><a download href="${escHtml(winMonitor)}">windows connection-monitor.ps1</a></div>
+<div><a download href="${escHtml(linAgent)}">linux node-agent.sh</a></div>
+<div><a download href="${escHtml(winAgent)}">windows node-agent.ps1</a></div>
 <div><a download href="${escHtml(linRemoveAsset)}">linux-remove.sh</a></div>
 <div><a download href="${escHtml(macRemoveAsset)}">macos-remove.sh</a></div>
 <div><a download href="${escHtml(winRemoveAsset)}">windows-remove.ps1</a></div>
@@ -1544,6 +1622,7 @@ ${adminOpsPanel}
       target: (document.getElementById('op-target') && document.getElementById('op-target').value) || '',
       limit: (document.getElementById('op-limit') && document.getElementById('op-limit').value) || '',
       args: (document.getElementById('op-args') && document.getElementById('op-args').value) || '',
+      notice_message: (document.getElementById('op-notice-message') && document.getElementById('op-notice-message').value) || '',
       patch_filename: (document.getElementById('op-patch-filename') && document.getElementById('op-patch-filename').value) || '',
       patch_content: (document.getElementById('op-patch-content') && document.getElementById('op-patch-content').value) || '',
       selected_nodes: selectedNodeIds()
@@ -1560,6 +1639,7 @@ ${adminOpsPanel}
     setValue('op-target', String(state.target || ''));
     setValue('op-limit', String(state.limit || ''));
     setValue('op-args', String(state.args || ''));
+    setValue('op-notice-message', String(state.notice_message || ''));
     setValue('op-patch-filename', String(state.patch_filename || ''));
     setValue('op-patch-content', String(state.patch_content || ''));
     const selected = Array.isArray(state.selected_nodes) ? new Set(state.selected_nodes.map((v) => String(v))) : new Set();
@@ -1655,7 +1735,7 @@ ${adminOpsPanel}
 
   loadAdminOpsState();
   if (hasAdminOps()) {
-    const saveIds = ['op-playbook', 'op-target', 'op-limit', 'op-args', 'op-patch-filename', 'op-patch-content'];
+    const saveIds = ['op-playbook', 'op-target', 'op-limit', 'op-args', 'op-notice-message', 'op-patch-filename', 'op-patch-content'];
     for (const id of saveIds) {
       const el = document.getElementById(id);
       if (!el) continue;
@@ -1680,6 +1760,27 @@ ${adminOpsPanel}
         };
         const out = await postJson('/api/v1/admin/task', payload);
         setOut('op-task-result', JSON.stringify(out, null, 2));
+        saveAdminOpsState();
+      } catch (err) {
+        setOut('op-task-result', 'error: ' + (err && err.message || err));
+      }
+    });
+  }
+
+  const noticeBtn = document.getElementById('op-send-notice');
+  if (noticeBtn) {
+    noticeBtn.addEventListener('click', async () => {
+      try {
+        const message = (document.getElementById('op-notice-message') && document.getElementById('op-notice-message').value || '').trim();
+        if (!message) throw new Error('notice message required');
+        const payload = {
+          playbook: 'operator_notice',
+          args: { message },
+          ...targetPayload()
+        };
+        const out = await postJson('/api/v1/admin/task', payload);
+        setOut('op-task-result', JSON.stringify(out, null, 2));
+        saveAdminOpsState();
       } catch (err) {
         setOut('op-task-result', 'error: ' + (err && err.message || err));
       }
@@ -1700,6 +1801,7 @@ ${adminOpsPanel}
       try {
         const out = await uploadPatchOnly();
         setOut('op-patch-result', JSON.stringify(out, null, 2));
+        saveAdminOpsState();
       } catch (err) {
         setOut('op-patch-result', 'error: ' + (err && err.message || err));
       }
@@ -1717,7 +1819,12 @@ ${adminOpsPanel}
           ...targetPayload()
         };
         const task = await postJson('/api/v1/admin/task', taskPayload);
-        setOut('op-patch-result', JSON.stringify({ patch, dispatch: task }, null, 2));
+        setOut('op-patch-result', JSON.stringify({
+          patch,
+          dispatch: task,
+          note: 'stage_patch stores file on node; use send notice popup for immediate visible confirmation'
+        }, null, 2));
+        saveAdminOpsState();
       } catch (err) {
         setOut('op-patch-result', 'error: ' + (err && err.message || err));
       }
@@ -1795,6 +1902,25 @@ function makeTaskId() {
 
 function makePatchId() {
   return `patch_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+}
+
+function safePatchFilename(value) {
+  const input = String(value || 'patch.bin').trim() || 'patch.bin';
+  const base = path.basename(input);
+  const sanitized = base.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 180);
+  return sanitized || 'patch.bin';
+}
+
+function persistPatchToDisk(patchId, filename, raw) {
+  if (!patchStoreDir) return '';
+  const safeName = safePatchFilename(filename);
+  const absDir = path.resolve(patchStoreDir);
+  fs.mkdirSync(absDir, { recursive: true });
+  const outPath = path.join(absDir, `${patchId}__${safeName}`);
+  const tmpPath = `${outPath}.tmp`;
+  fs.writeFileSync(tmpPath, raw);
+  fs.renameSync(tmpPath, outPath);
+  return outPath;
 }
 
 function handleHeartbeat(body, res) {
@@ -2134,24 +2260,54 @@ function handleAdminPatch(body, adminEmail, res) {
 
   const patchId = String(body.patch_id || '').trim() || makePatchId();
   const sha256 = crypto.createHash('sha256').update(raw).digest('hex');
+  const safeFilename = safePatchFilename(filename);
+  let storedPath = '';
+  try {
+    storedPath = persistPatchToDisk(patchId, safeFilename, raw);
+  } catch (_) {
+    storedPath = '';
+  }
 
   patches.set(patchId, {
     patch_id: patchId,
-    filename,
+    filename: safeFilename,
+    original_filename: filename,
     content_b64: contentB64,
     sha256,
     uploaded_at: new Date().toISOString(),
     uploaded_by: adminEmail,
-    bytes: raw.length
+    bytes: raw.length,
+    stored_path: storedPath,
+    storage_mode: storedPath ? 'disk+memory' : 'memory'
   });
 
   sendJson(res, 200, {
     ok: true,
     patch_id: patchId,
-    filename,
+    filename: safeFilename,
+    original_filename: filename,
     sha256,
-    bytes: raw.length
+    bytes: raw.length,
+    storage_mode: storedPath ? 'disk+memory' : 'memory',
+    anchor_path: storedPath || ''
   });
+}
+
+function handleAdminPatches(res) {
+  const list = Array.from(patches.values())
+    .map((v) => ({
+      patch_id: v.patch_id,
+      filename: v.filename,
+      original_filename: v.original_filename || v.filename,
+      sha256: v.sha256,
+      uploaded_at: v.uploaded_at,
+      uploaded_by: v.uploaded_by,
+      bytes: v.bytes,
+      storage_mode: v.storage_mode || 'memory',
+      anchor_path: v.stored_path || ''
+    }))
+    .sort((a, b) => String(b.uploaded_at || '').localeCompare(String(a.uploaded_at || '')));
+  sendJson(res, 200, { ok: true, count: list.length, patches: list });
 }
 
 function handleAdminNodeToken(body, adminEmail, res) {
@@ -2542,6 +2698,11 @@ const server = http.createServer(async (req, res) => {
       const nodeId = String(url.searchParams.get('node_id') || '').trim();
       if (!nodeId) return badRequest(res, 'node_id required');
       sendJson(res, 200, { ok: true, node_id: nodeId, results: resultsByNode.get(nodeId) || [] });
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/v1/admin/patches') {
+      handleAdminPatches(res);
       return;
     }
 

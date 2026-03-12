@@ -15,8 +15,8 @@ $winScripts = Join-Path $repoRoot 'scripts\windows'
 $iocFile = Join-Path $repoRoot 'iocs\seed-iocs.txt'
 $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $endpointOut = Join-Path $repoRoot ("output\oneclick-endpoint-$timestamp")
-$monitorOut = Join-Path $repoRoot 'output\oneclick-live-dashboard'
-$agentOut = Join-Path $repoRoot 'output\oneclick-node-agent'
+$monitorOut = if ([string]::IsNullOrWhiteSpace($env:DEFEND_MONITOR_OUTPUT_DIR)) { Join-Path $env:USERPROFILE '.defendmesh\live-dashboard' } else { $env:DEFEND_MONITOR_OUTPUT_DIR }
+$agentOut = if ([string]::IsNullOrWhiteSpace($env:DEFEND_AGENT_OUTPUT_DIR)) { Join-Path $env:USERPROFILE '.defendmesh\node-agent' } else { $env:DEFEND_AGENT_OUTPUT_DIR }
 
 function Stop-ScriptProcess {
     param([string]$ScriptName)

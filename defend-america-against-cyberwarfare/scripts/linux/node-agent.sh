@@ -9,7 +9,7 @@ POLL_SEC=10
 PROFILE_EVERY_SEC="${DEFEND_PROFILE_EVERY_SEC:-600}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-OUTPUT_DIR="$REPO_ROOT/output/node-agent"
+OUTPUT_DIR="${DEFEND_OUTPUT_DIR:-${HOME:-/tmp}/.defendmesh/node-agent}"
 
 usage() {
   echo "Usage: node-agent.sh --anchor-url URL|URL1,URL2 [--node-id ID] [--anchor-token TOKEN] [--poll-sec N] [--profile-every-sec N] [--output-dir DIR]"
@@ -158,6 +158,21 @@ maybe_send_node_profile() {
   fi
 }
 
+show_operator_notice() {
+  local msg="$1"
+  [ -z "$msg" ] && msg="DefendMesh operator notice"
+  printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$msg" >> "$OUTPUT_DIR/operator-notice.log"
+  if command -v notify-send >/dev/null 2>&1; then
+    notify-send "DefendMesh Notice" "$msg" >/dev/null 2>&1 || true
+  fi
+  if command -v wall >/dev/null 2>&1; then
+    printf '%s\n' "$msg" | wall >/dev/null 2>&1 || true
+  fi
+  if command -v logger >/dev/null 2>&1; then
+    logger -t defendmesh-notice "$msg" >/dev/null 2>&1 || true
+  fi
+}
+
 fetch_tasks() {
   local out="$1"
   anchor_get_file "/api/v1/node/tasks?node_id=$NODE_ID" "$out"
@@ -241,7 +256,7 @@ import base64,hashlib,json,os,sys
 path='$tmp_json'
 outdir='$OUTPUT_DIR/patches'
 obj=json.load(open(path))
-fname=obj.get('filename','patch.bin')
+fname=os.path.basename(obj.get('filename','patch.bin')) or 'patch.bin'
 raw=base64.b64decode(obj.get('content_b64',''))
 sha=obj.get('sha256','')
 calc=hashlib.sha256(raw).hexdigest()
@@ -260,12 +275,24 @@ PY
             status="error"; output="patch sha mismatch"
           else
             output="patch staged at $saved_path"
+            show_operator_notice "DefendMesh patch staged on $NODE_ID: $saved_path"
           fi
         else
           status="error"; output="failed to fetch patch"
         fi
         rm -f "$tmp_json"
       fi
+      ;;
+    operator_notice)
+      notice_msg=$(python3 - <<PY
+import json
+obj=json.loads('''$args_json''') if '''$args_json'''.strip() else {}
+msg=str(obj.get('message','DefendMesh operator notice')).strip()
+print(msg[:300] if msg else 'DefendMesh operator notice')
+PY
+)
+      show_operator_notice "$notice_msg"
+      output="operator_notice shown: $notice_msg"
       ;;
     *)
       status="error"; output="unsupported playbook: $playbook"

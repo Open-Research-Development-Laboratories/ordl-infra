@@ -11,7 +11,7 @@ param(
 $scriptRoot = Split-Path -Parent $PSCommandPath
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $scriptRoot '..\..'))
 if ([string]::IsNullOrWhiteSpace($OutputDir)) {
-    $OutputDir = Join-Path $repoRoot 'output\node-agent'
+    $OutputDir = Join-Path $env:USERPROFILE '.defendmesh\node-agent'
 }
 if ([string]::IsNullOrWhiteSpace($NodeId)) {
     $NodeId = $env:COMPUTERNAME
@@ -137,6 +137,21 @@ function Send-NodeProfile {
     } catch {}
 }
 
+function Show-OperatorNotice {
+    param([string]$Message)
+    $msg = [string]$Message
+    if ([string]::IsNullOrWhiteSpace($msg)) { $msg = 'DefendMesh operator notice' }
+    try {
+        $line = "[{0}] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $msg
+        $line | Out-File -LiteralPath (Join-Path $OutputDir 'operator-notice.log') -Encoding UTF8 -Append
+    } catch {}
+    try { & msg.exe * $msg | Out-Null } catch {}
+    try {
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+        [System.Windows.Forms.MessageBox]::Show($msg, 'DefendMesh Notice') | Out-Null
+    } catch {}
+}
+
 function Run-Task {
     param([object]$Task)
 
@@ -188,13 +203,25 @@ function Run-Task {
                 $patchId = [string]$args.patch_id
                 $patch = Invoke-Anchor -Method 'Get' -Path ("/api/v1/node/patch/{0}" -f $patchId)
                 $raw = [Convert]::FromBase64String([string]$patch.content_b64)
-                $patchFile = Join-Path (Join-Path $OutputDir 'patches') ([string]$patch.filename)
+                $safePatchName = [IO.Path]::GetFileName([string]$patch.filename)
+                if ([string]::IsNullOrWhiteSpace($safePatchName)) { $safePatchName = 'patch.bin' }
+                $patchFile = Join-Path (Join-Path $OutputDir 'patches') $safePatchName
                 [IO.File]::WriteAllBytes($patchFile, $raw)
                 $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $patchFile).Hash.ToLowerInvariant()
                 if ($patch.sha256 -and $sha -ne [string]$patch.sha256) {
                     throw 'patch sha mismatch'
                 }
                 $output = "patch staged at $patchFile"
+                Show-OperatorNotice -Message ("DefendMesh patch staged on {0}: {1}" -f $NodeId, $patchFile)
+            }
+            'operator_notice' {
+                $noticeMessage = 'DefendMesh operator notice'
+                if ($null -ne $args -and $args.PSObject.Properties.Name -contains 'message') {
+                    $noticeMessage = [string]$args.message
+                }
+                if ($noticeMessage.Length -gt 300) { $noticeMessage = $noticeMessage.Substring(0, 300) }
+                Show-OperatorNotice -Message $noticeMessage
+                $output = "operator_notice shown: $noticeMessage"
             }
             default {
                 throw "unsupported playbook: $playbook"

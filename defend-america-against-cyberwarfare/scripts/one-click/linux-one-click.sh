@@ -42,8 +42,8 @@ done
 
 ts="$(date +%Y%m%d-%H%M%S)"
 ENDPOINT_OUT="$REPO_ROOT/output/oneclick-endpoint-$ts"
-MONITOR_OUT="$REPO_ROOT/output/oneclick-live-dashboard"
-AGENT_OUT="$REPO_ROOT/output/oneclick-node-agent"
+MONITOR_OUT="${DEFEND_MONITOR_OUTPUT_DIR:-${HOME:-/tmp}/.defendmesh/live-dashboard}"
+AGENT_OUT="${DEFEND_AGENT_OUTPUT_DIR:-${HOME:-/tmp}/.defendmesh/node-agent}"
 IOC_FILE="$REPO_ROOT/iocs/seed-iocs.txt"
 
 mkdir -p "$MONITOR_OUT" "$AGENT_OUT"
