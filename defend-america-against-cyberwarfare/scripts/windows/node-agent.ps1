@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$AnchorUrl = $env:DEFEND_ANCHOR_URL,
+    [string]$AnchorUrl = $null,
     [string]$NodeId = $env:DEFEND_NODE_ID,
     [string]$AnchorToken = $env:DEFEND_ANCHOR_TOKEN,
     [int]$PollSec = 10,
@@ -15,9 +15,32 @@ if ([string]::IsNullOrWhiteSpace($OutputDir)) {
 if ([string]::IsNullOrWhiteSpace($NodeId)) {
     $NodeId = $env:COMPUTERNAME
 }
-if ([string]::IsNullOrWhiteSpace($AnchorUrl)) {
-    throw 'AnchorUrl is required (param or DEFEND_ANCHOR_URL)'
+
+function Split-AnchorUrls {
+    param([string]$Value)
+    if ([string]::IsNullOrWhiteSpace($Value)) { return @() }
+    return @(
+        $Value -split '[,;]' |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
 }
+
+$resolvedAnchorUrls = @()
+if ($PSBoundParameters.ContainsKey('AnchorUrl')) {
+    $resolvedAnchorUrls = Split-AnchorUrls -Value $AnchorUrl
+}
+if ($resolvedAnchorUrls.Count -eq 0) {
+    $resolvedAnchorUrls = Split-AnchorUrls -Value $env:DEFEND_ANCHOR_URLS
+}
+if ($resolvedAnchorUrls.Count -eq 0) {
+    $resolvedAnchorUrls = Split-AnchorUrls -Value $env:DEFEND_ANCHOR_URL
+}
+if ($resolvedAnchorUrls.Count -eq 0) {
+    throw 'AnchorUrl is required (param AnchorUrl, DEFEND_ANCHOR_URLS, or DEFEND_ANCHOR_URL)'
+}
+$anchorUrls = @($resolvedAnchorUrls)
+$anchorUrlList = ($anchorUrls -join ',')
 if ($PollSec -lt 2) { $PollSec = 2 }
 
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
@@ -41,14 +64,22 @@ function Invoke-Anchor {
         [string]$Path,
         [object]$Body = $null
     )
-    $uri = ('{0}{1}' -f $AnchorUrl.TrimEnd('/'), $Path)
-    $params = @{ Method = $Method; Uri = $uri; ErrorAction = 'Stop' }
+    $params = @{ Method = $Method; ErrorAction = 'Stop' }
     if ($headers.Count -gt 0) { $params['Headers'] = $headers }
     if ($null -ne $Body) {
         $params['ContentType'] = 'application/json'
         $params['Body'] = ($Body | ConvertTo-Json -Depth 8 -Compress)
     }
-    return Invoke-RestMethod @params
+    $errors = @()
+    foreach ($anchor in $anchorUrls) {
+        $params['Uri'] = ('{0}{1}' -f $anchor.TrimEnd('/'), $Path)
+        try {
+            return Invoke-RestMethod @params
+        } catch {
+            $errors += ("{0}: {1}" -f $anchor, $_.Exception.Message)
+        }
+    }
+    throw ("anchor request failed method={0} path={1} errors={2}" -f $Method, $Path, ($errors -join ' | '))
 }
 
 function Send-NodeLog {
@@ -97,7 +128,7 @@ function Run-Task {
             'monitor_start' {
                 $interval = 2
                 if ($null -ne $args -and $args.PSObject.Properties.Name -contains 'interval_sec') { $interval = [int]$args.interval_sec }
-                $monitorArgs = "-NoProfile -ExecutionPolicy Bypass -File \"$(Join-Path $scriptRoot 'connection-monitor.ps1')\" -IntervalSec $interval -OutputDir \"$(Join-Path $repoRoot 'output\live-dashboard')\" -AnchorUrl \"$AnchorUrl\" -NodeId \"$NodeId\""
+                $monitorArgs = "-NoProfile -ExecutionPolicy Bypass -File \"$(Join-Path $scriptRoot 'connection-monitor.ps1')\" -IntervalSec $interval -OutputDir \"$(Join-Path $repoRoot 'output\live-dashboard')\" -AnchorUrl \"$anchorUrlList\" -NodeId \"$NodeId\""
                 if (-not [string]::IsNullOrWhiteSpace($AnchorToken)) {
                     $monitorArgs += " -AnchorToken \"$AnchorToken\""
                 }
@@ -115,7 +146,7 @@ function Run-Task {
                 $loops = 5
                 if ($null -ne $args -and $args.PSObject.Properties.Name -contains 'interval_sec') { $interval = [int]$args.interval_sec }
                 if ($null -ne $args -and $args.PSObject.Properties.Name -contains 'loop_count') { $loops = [int]$args.loop_count }
-                & powershell -ExecutionPolicy Bypass -File (Join-Path $scriptRoot 'connection-monitor.ps1') -IntervalSec $interval -LoopCount $loops -OutputDir (Join-Path $repoRoot 'output\live-dashboard') -AnchorUrl $AnchorUrl -NodeId $NodeId -AnchorToken $AnchorToken
+                & powershell -ExecutionPolicy Bypass -File (Join-Path $scriptRoot 'connection-monitor.ps1') -IntervalSec $interval -LoopCount $loops -OutputDir (Join-Path $repoRoot 'output\live-dashboard') -AnchorUrl $anchorUrlList -NodeId $NodeId -AnchorToken $AnchorToken
                 $output = 'monitor_oneshot done'
             }
             'stage_patch' {
@@ -147,7 +178,7 @@ function Run-Task {
     Write-AgentLog ("task={0} playbook={1} status={2}" -f $taskId, $playbook, $status)
 }
 
-Write-AgentLog "node-agent start node_id=$NodeId anchor=$AnchorUrl"
+Write-AgentLog "node-agent start node_id=$NodeId anchors=$anchorUrlList"
 Send-NodeLog -Level 'info' -Message 'node-agent started'
 
 while ($true) {

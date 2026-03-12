@@ -132,8 +132,16 @@ if command -v ss >/dev/null 2>&1; then
   ss -nt 2>/dev/null > "$CONN_RAW" || true
   connection_count="$(awk 'NR>1{c++} END{print c+0}' "$CONN_RAW" 2>/dev/null)"
 elif command -v netstat >/dev/null 2>&1; then
-  netstat -nt 2>/dev/null > "$CONN_RAW" || true
-  connection_count="$(awk 'NR>2{c++} END{print c+0}' "$CONN_RAW" 2>/dev/null)"
+  if netstat -nt >/dev/null 2>&1; then
+    netstat -nt 2>/dev/null > "$CONN_RAW" || true
+    connection_count="$(awk 'NR>2{c++} END{print c+0}' "$CONN_RAW" 2>/dev/null)"
+  elif netstat -anp tcp >/dev/null 2>&1; then
+    netstat -anp tcp 2>/dev/null > "$CONN_RAW" || true
+    connection_count="$(awk 'toupper($1)=="TCP"{c++} END{print c+0}' "$CONN_RAW" 2>/dev/null)"
+  else
+    echo "No usable netstat mode" > "$CONN_RAW"
+    connection_count=0
+  fi
 else
   echo "No ss/netstat available" > "$CONN_RAW"
   connection_count=0

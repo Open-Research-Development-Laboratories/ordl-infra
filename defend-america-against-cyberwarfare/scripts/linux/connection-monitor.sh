@@ -5,6 +5,7 @@ INTERVAL_SEC=2
 HISTORY_POINTS=180
 LOOP_COUNT=0
 ANCHOR_URL="${DEFEND_ANCHOR_URL:-}"
+ANCHOR_URLS="${DEFEND_ANCHOR_URLS:-}"
 NODE_ID="${DEFEND_NODE_ID:-}"
 ANCHOR_TOKEN="${DEFEND_ANCHOR_TOKEN:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,7 +13,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 OUTPUT_DIR="$REPO_ROOT/output/live-dashboard"
 
 usage() {
-  echo "Usage: connection-monitor.sh [--interval-sec N] [--history-points N] [--loop-count N] [--output-dir DIR] [--anchor-url URL] [--node-id ID] [--anchor-token TOKEN]"
+  echo "Usage: connection-monitor.sh [--interval-sec N] [--history-points N] [--loop-count N] [--output-dir DIR] [--anchor-url URL|URL1,URL2] [--node-id ID] [--anchor-token TOKEN]"
 }
 
 while [ $# -gt 0 ]; do
@@ -22,6 +23,7 @@ while [ $# -gt 0 ]; do
     --loop-count) shift; LOOP_COUNT="${1:-0}" ;;
     --output-dir) shift; OUTPUT_DIR="${1:-$OUTPUT_DIR}" ;;
     --anchor-url) shift; ANCHOR_URL="${1:-$ANCHOR_URL}" ;;
+    --anchor-urls) shift; ANCHOR_URLS="${1:-$ANCHOR_URLS}" ;;
     --node-id) shift; NODE_ID="${1:-$NODE_ID}" ;;
     --anchor-token) shift; ANCHOR_TOKEN="${1:-$ANCHOR_TOKEN}" ;;
     -h|--help) usage; exit 0 ;;
@@ -33,6 +35,9 @@ done
 [ "$INTERVAL_SEC" -lt 1 ] 2>/dev/null && INTERVAL_SEC=1
 [ "$HISTORY_POINTS" -lt 10 ] 2>/dev/null && HISTORY_POINTS=10
 [ -z "$NODE_ID" ] && NODE_ID="$(hostname 2>/dev/null || echo "unknown-node")"
+if [ -z "$ANCHOR_URLS" ] && [ -n "$ANCHOR_URL" ]; then
+  ANCHOR_URLS="$ANCHOR_URL"
+fi
 
 mkdir -p "$OUTPUT_DIR"
 DASHBOARD_HTML="$OUTPUT_DIR/dashboard.html"
@@ -47,7 +52,14 @@ get_connection_count() {
     return
   fi
   if command -v netstat >/dev/null 2>&1; then
-    netstat -nt 2>/dev/null | awk 'NR>2{c++} END{print c+0}'
+    if netstat -nt >/dev/null 2>&1; then
+      netstat -nt 2>/dev/null | awk 'NR>2{c++} END{print c+0}'
+      return
+    fi
+    if netstat -anp tcp >/dev/null 2>&1; then
+      netstat -anp tcp 2>/dev/null | awk 'toupper($1)=="TCP"{c++} END{print c+0}'
+      return
+    fi
     return
   fi
   echo 0
@@ -57,16 +69,21 @@ json_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
+anchor_url_items() {
+  printf '%s' "$1" | tr ';' ',' | awk -F',' '{for(i=1;i<=NF;i++){gsub(/^[ \t]+|[ \t]+$/, "", $i); if($i!="") print $i}}'
+}
+
 send_anchor_heartbeat() {
   local presence="$1"
   local count="$2"
   local trend="$3"
   local updated_at="$4"
-  local endpoint="${ANCHOR_URL%/}/api/v1/heartbeat"
+  local endpoint
   local node_id_json
   local trend_norm
   local presence_bool
   local payload
+  local url
   node_id_json="$(json_escape "$NODE_ID")"
   case "$trend" in
     UP) trend_norm="up" ;;
@@ -80,38 +97,37 @@ send_anchor_heartbeat() {
   fi
   payload="$(printf '{"node_id":"%s","platform":"linux","connections_present":%s,"current_count":%s,"trend":"%s","updated_at":"%s"}' "$node_id_json" "$presence_bool" "$count" "$trend_norm" "$updated_at")"
 
-  if command -v curl >/dev/null 2>&1; then
-    if [ -n "$ANCHOR_TOKEN" ]; then
-      curl -fsS -m 10 -X POST \
-        -H 'Content-Type: application/json' \
-        -H "Authorization: Bearer $ANCHOR_TOKEN" \
-        -d "$payload" \
-        "$endpoint" >/dev/null 2>&1
-    else
-      curl -fsS -m 10 -X POST \
-        -H 'Content-Type: application/json' \
-        -d "$payload" \
-        "$endpoint" >/dev/null 2>&1
+  while IFS= read -r url; do
+    [ -z "$url" ] && continue
+    endpoint="${url%/}/api/v1/heartbeat"
+    if command -v curl >/dev/null 2>&1; then
+      if [ -n "$ANCHOR_TOKEN" ]; then
+        curl -fsS -m 10 -X POST \
+          -H 'Content-Type: application/json' \
+          -H "Authorization: Bearer $ANCHOR_TOKEN" \
+          -d "$payload" \
+          "$endpoint" >/dev/null 2>&1 && return 0
+      else
+        curl -fsS -m 10 -X POST \
+          -H 'Content-Type: application/json' \
+          -d "$payload" \
+          "$endpoint" >/dev/null 2>&1 && return 0
+      fi
+    elif command -v wget >/dev/null 2>&1; then
+      if [ -n "$ANCHOR_TOKEN" ]; then
+        wget -q -O /dev/null --timeout=10 \
+          --header='Content-Type: application/json' \
+          --header="Authorization: Bearer $ANCHOR_TOKEN" \
+          --post-data="$payload" \
+          "$endpoint" >/dev/null 2>&1 && return 0
+      else
+        wget -q -O /dev/null --timeout=10 \
+          --header='Content-Type: application/json' \
+          --post-data="$payload" \
+          "$endpoint" >/dev/null 2>&1 && return 0
+      fi
     fi
-    return $?
-  fi
-
-  if command -v wget >/dev/null 2>&1; then
-    if [ -n "$ANCHOR_TOKEN" ]; then
-      wget -q -O /dev/null --timeout=10 \
-        --header='Content-Type: application/json' \
-        --header="Authorization: Bearer $ANCHOR_TOKEN" \
-        --post-data="$payload" \
-        "$endpoint" >/dev/null 2>&1
-    else
-      wget -q -O /dev/null --timeout=10 \
-        --header='Content-Type: application/json' \
-        --post-data="$payload" \
-        "$endpoint" >/dev/null 2>&1
-    fi
-    return $?
-  fi
-
+  done < <(anchor_url_items "$ANCHOR_URLS")
   return 127
 }
 
@@ -196,7 +212,7 @@ while true; do
   printf '%s,%s,%s\n' "$ts" "$count" "$trend" >> "$HISTORY_CSV"
   trim_history
 
-  if [ -n "$ANCHOR_URL" ]; then
+  if [ -n "$ANCHOR_URLS" ]; then
     send_anchor_heartbeat "$presence" "$count" "$trend" "$updated_at_utc"
     hb_rc=$?
     if [ "$hb_rc" -ne 0 ]; then

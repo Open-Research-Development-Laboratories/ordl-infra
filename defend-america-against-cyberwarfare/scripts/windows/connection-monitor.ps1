@@ -4,7 +4,7 @@ param(
     [int]$HistoryPoints = 180,
     [int]$LoopCount = 0,
     [string]$OutputDir,
-    [string]$AnchorUrl = $env:DEFEND_ANCHOR_URL,
+    [string]$AnchorUrl,
     [string]$NodeId = $env:DEFEND_NODE_ID,
     [string]$AnchorToken = $env:DEFEND_ANCHOR_TOKEN
 )
@@ -27,9 +27,22 @@ $logPath = Join-Path $OutputDir 'monitor.log'
 $samples = New-Object System.Collections.Generic.List[object]
 $prev = -1
 $iter = 0
-$heartbeatUrl = $null
+$heartbeatUrls = @()
+$anchorSource = $null
 if (-not [string]::IsNullOrWhiteSpace($AnchorUrl)) {
-    $heartbeatUrl = ('{0}/api/v1/heartbeat' -f $AnchorUrl.TrimEnd('/'))
+    $anchorSource = $AnchorUrl
+} elseif (-not [string]::IsNullOrWhiteSpace($env:DEFEND_ANCHOR_URLS)) {
+    $anchorSource = $env:DEFEND_ANCHOR_URLS
+} elseif (-not [string]::IsNullOrWhiteSpace($env:DEFEND_ANCHOR_URL)) {
+    $anchorSource = $env:DEFEND_ANCHOR_URL
+}
+if (-not [string]::IsNullOrWhiteSpace($anchorSource)) {
+    foreach ($anchor in ($anchorSource -split '[;,]')) {
+        $trimmedAnchor = $anchor.Trim()
+        if (-not [string]::IsNullOrWhiteSpace($trimmedAnchor)) {
+            $heartbeatUrls += ('{0}/api/v1/heartbeat' -f $trimmedAnchor.TrimEnd('/'))
+        }
+    }
 }
 $heartbeatNodeId = if ([string]::IsNullOrWhiteSpace($NodeId)) { $env:COMPUTERNAME } else { $NodeId }
 $heartbeatHeaders = @{}
@@ -132,30 +145,41 @@ while ($true) {
         trend = $trend
     }
 
-    if ($heartbeatUrl) {
-        try {
-            $heartbeatPayload = [ordered]@{
-                node_id = $heartbeatNodeId
-                platform = 'windows'
-                connections_present = $presenceBool
-                current_count = $count
-                trend = $heartbeatTrend
-                updated_at = (Get-Date).ToString('o')
+    if ($heartbeatUrls.Count -gt 0) {
+        $heartbeatPayload = [ordered]@{
+            node_id = $heartbeatNodeId
+            platform = 'windows'
+            connections_present = $presenceBool
+            current_count = $count
+            trend = $heartbeatTrend
+            updated_at = (Get-Date).ToString('o')
+        }
+        $invokeParams = @{
+            Method = 'Post'
+            ContentType = 'application/json'
+            Body = ($heartbeatPayload | ConvertTo-Json -Depth 4 -Compress)
+            ErrorAction = 'Stop'
+        }
+        if ($heartbeatHeaders.Count -gt 0) {
+            $invokeParams['Headers'] = $heartbeatHeaders
+        }
+
+        $heartbeatSucceeded = $false
+        $heartbeatErrors = New-Object System.Collections.Generic.List[string]
+        foreach ($heartbeatUrl in $heartbeatUrls) {
+            try {
+                $invokeParams['Uri'] = $heartbeatUrl
+                Invoke-RestMethod @invokeParams | Out-Null
+                $heartbeatSucceeded = $true
+                break
+            } catch {
+                $errMsg = $_.Exception.Message -replace '\s+', ' '
+                $heartbeatErrors.Add(("uri={0} msg={1}" -f $heartbeatUrl, $errMsg)) | Out-Null
             }
-            $invokeParams = @{
-                Method = 'Post'
-                Uri = $heartbeatUrl
-                ContentType = 'application/json'
-                Body = ($heartbeatPayload | ConvertTo-Json -Depth 4 -Compress)
-                ErrorAction = 'Stop'
-            }
-            if ($heartbeatHeaders.Count -gt 0) {
-                $invokeParams['Headers'] = $heartbeatHeaders
-            }
-            Invoke-RestMethod @invokeParams | Out-Null
-        } catch {
-            $errMsg = $_.Exception.Message -replace '\s+', ' '
-            $hbLine = "[{0}] heartbeat_error uri={1} msg={2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $heartbeatUrl, $errMsg
+        }
+
+        if (-not $heartbeatSucceeded -and $heartbeatErrors.Count -gt 0) {
+            $hbLine = "[{0}] heartbeat_error attempts={1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), ($heartbeatErrors -join '; ')
             $hbLine | Add-Content -LiteralPath $logPath -Encoding UTF8
         }
     }

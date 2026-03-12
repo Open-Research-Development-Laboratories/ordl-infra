@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const fs = require('node:fs');
 const http = require('node:http');
 
 const bind = process.env.ANCHOR_BIND || '0.0.0.0';
@@ -8,6 +9,7 @@ const parsedPort = Number(process.env.ANCHOR_PORT || 8787);
 const port = Number.isInteger(parsedPort) && parsedPort > 0 && parsedPort < 65536 ? parsedPort : 8787;
 const anchorName = process.env.ANCHOR_NAME || 'DefendMesh Anchor';
 const publicUrl = process.env.ANCHOR_PUBLIC_URL || 'https://defend.ordl.org';
+const nodeTokensFile = process.env.ANCHOR_NODE_TOKENS_FILE || './node-tokens.json';
 
 const nodeBearerToken = process.env.ANCHOR_NODE_TOKEN || '';
 const cfServiceId = process.env.ANCHOR_CF_SERVICE_TOKEN_ID || '';
@@ -28,6 +30,9 @@ const logsByNode = new Map();
 const queuesByNode = new Map();
 const resultsByNode = new Map();
 const patches = new Map();
+const profilesByNode = new Map();
+const nodeTokensByNode = new Map();
+const nodeIdsByToken = new Map();
 
 const PLAYBOOKS = new Set([
   'endpoint_audit',
@@ -37,6 +42,69 @@ const PLAYBOOKS = new Set([
   'monitor_oneshot',
   'stage_patch'
 ]);
+
+function saveNodeTokens() {
+  if (!nodeTokensFile) return;
+  const dir = nodeTokensFile.includes('/') ? nodeTokensFile.slice(0, nodeTokensFile.lastIndexOf('/')) : '.';
+  if (dir) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  const arr = Array.from(nodeTokensByNode.values()).map((v) => ({
+    node_id: v.node_id,
+    token: v.token,
+    created_at: v.created_at,
+    created_by: v.created_by,
+    note: v.note || ''
+  }));
+  const tmpFile = `${nodeTokensFile}.tmp`;
+  fs.writeFileSync(tmpFile, `${JSON.stringify(arr, null, 2)}\n`, 'utf8');
+  fs.renameSync(tmpFile, nodeTokensFile);
+}
+
+function setNodeToken(nodeId, token, createdBy, note = '') {
+  if (!nodeId || !token) return;
+  const existing = nodeTokensByNode.get(nodeId);
+  if (existing && existing.token) {
+    nodeIdsByToken.delete(existing.token);
+  }
+  const record = {
+    node_id: nodeId,
+    token,
+    created_at: new Date().toISOString(),
+    created_by: createdBy || 'unknown',
+    note: note || ''
+  };
+  nodeTokensByNode.set(nodeId, record);
+  nodeIdsByToken.set(token, nodeId);
+  saveNodeTokens();
+}
+
+function loadNodeTokens() {
+  if (!nodeTokensFile) return;
+  try {
+    if (!fs.existsSync(nodeTokensFile)) return;
+    const raw = fs.readFileSync(nodeTokensFile, 'utf8');
+    if (!raw.trim()) return;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return;
+    for (const item of parsed) {
+      const nodeId = String(item && item.node_id || '').trim();
+      const token = String(item && item.token || '').trim();
+      if (!nodeId || !token) continue;
+      const record = {
+        node_id: nodeId,
+        token,
+        created_at: String(item.created_at || new Date().toISOString()),
+        created_by: String(item.created_by || 'unknown'),
+        note: String(item.note || '')
+      };
+      nodeTokensByNode.set(nodeId, record);
+      nodeIdsByToken.set(token, nodeId);
+    }
+  } catch (_) {
+    // Ignore malformed token file and continue with empty registry.
+  }
+}
 
 function sendJson(res, statusCode, body) {
   const payload = JSON.stringify(body);
@@ -146,14 +214,17 @@ function pushBounded(map, key, value, maxLen) {
 
 function nodeAuthOk(req) {
   const auth = req.headers.authorization || '';
-  const bearerOk = nodeBearerToken ? auth === `Bearer ${nodeBearerToken}` : true;
+  const bearerToken = auth.startsWith('Bearer ') ? auth.slice('Bearer '.length).trim() : '';
+  const staticBearerOk = nodeBearerToken ? bearerToken === nodeBearerToken : false;
+  const dynamicBearerOk = bearerToken ? nodeIdsByToken.has(bearerToken) : false;
+  const bearerOk = staticBearerOk || dynamicBearerOk;
 
   const serviceConfigured = !!(cfServiceId && cfServiceSecret);
   const serviceOk = serviceConfigured
     ? req.headers['cf-access-client-id'] === cfServiceId && req.headers['cf-access-client-secret'] === cfServiceSecret
     : false;
 
-  if (nodeBearerToken || serviceConfigured) {
+  if (nodeBearerToken || serviceConfigured || nodeIdsByToken.size > 0) {
     return bearerOk || serviceOk;
   }
   return true;
@@ -185,6 +256,7 @@ function adminAuth(req) {
 function asNodeSnapshot(nowMs) {
   const out = [];
   for (const node of nodes.values()) {
+    const profile = profilesByNode.get(node.node_id) || {};
     const ageSec = Math.max(0, Math.floor((nowMs - node._updatedMs) / 1000));
     out.push({
       node_id: node.node_id,
@@ -194,30 +266,55 @@ function asNodeSnapshot(nowMs) {
       trend: node.trend,
       updated_at: node.updated_at,
       age_sec: ageSec,
-      queued_tasks: getQueue(node.node_id).length
+      queued_tasks: getQueue(node.node_id).length,
+      client_host: profile.client_host || '',
+      client_user: profile.client_user || '',
+      client_os: profile.client_os || '',
+      client_build: profile.client_build || '',
+      client_arch: profile.client_arch || '',
+      client_kernel: profile.client_kernel || '',
+      latency_ms: isFiniteNumber(node.latency_ms) ? node.latency_ms : 0
     });
   }
   out.sort((a, b) => a.node_id.localeCompare(b.node_id));
   return out;
 }
 
-function dashboardHtml() {
+function spoofHostname(value) {
+  const source = String(value || 'node');
+  const digest = crypto.createHash('sha256').update(source).digest('hex').slice(0, 8);
+  return `node-${digest}`;
+}
+
+function renderNodes(nodes, authorized) {
+  return nodes.map((n) => ({
+    ...n,
+    display_host: authorized ? (n.client_host || n.node_id || '-') : spoofHostname(n.client_host || n.node_id),
+    display_user: authorized ? (n.client_user || '-') : '-'
+  }));
+}
+
+function dashboardHtml(authorized) {
   const now = Date.now();
-  const list = asNodeSnapshot(now);
+  const list = renderNodes(asNodeSnapshot(now), authorized);
   const rows = list.length
     ? list
         .map((node) => `<tr>
 <td>${escHtml(node.node_id)}</td>
+<td>${escHtml(node.display_host)}</td>
+<td>${escHtml(node.display_user)}</td>
+<td>${escHtml(node.client_os || '-')}</td>
 <td>${escHtml(node.platform)}</td>
 <td>${node.connections_present ? 'yes' : 'no'}</td>
 <td>${node.current_count}</td>
 <td>${escHtml(node.trend)}</td>
+<td>${node.latency_ms}ms</td>
 <td>${escHtml(node.updated_at)}</td>
 <td>${node.age_sec}s</td>
 <td>${node.queued_tasks}</td>
 </tr>`)
         .join('')
-    : '<tr><td colspan="8">No nodes reported yet.</td></tr>';
+    : '<tr><td colspan="12">No nodes reported yet.</td></tr>';
 
   return `<!doctype html>
 <html lang="en">
@@ -227,29 +324,36 @@ function dashboardHtml() {
 <title>${escHtml(anchorName)}</title>
 <meta http-equiv="refresh" content="5">
 <style>
-:root { color-scheme: light dark; }
-body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; margin: 24px; }
-h1 { margin: 0 0 8px 0; }
-small { color: #666; }
-table { border-collapse: collapse; width: 100%; margin-top: 16px; }
-th, td { border: 1px solid #8885; padding: 8px; text-align: left; font-size: 14px; }
-th { background: #8882; }
-code { background: #8882; padding: 2px 4px; border-radius: 4px; }
+body { font-family: "JetBrains Mono", "SF Mono", Consolas, monospace; margin: 0; background: #0a0a0a; color: #fff; }
+.wrap { max-width: 1440px; margin: 24px auto; padding: 0 16px; }
+.panel { border: 1px solid #2a2a2a; background: #111; border-radius: 0; padding: 14px; }
+h1 { margin: 0 0 6px 0; font-size: 20px; letter-spacing: .04em; text-transform: uppercase; }
+.meta { color: #ccc; font-size: 12px; margin-bottom: 10px; }
+a { color: #fff; text-decoration: underline; }
+table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+th, td { border: 1px solid #2a2a2a; padding: 7px 8px; text-align: left; font-size: 12px; white-space: nowrap; }
+th { background: #0a0a0a; color: #fff; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+td { color: #ccc; }
+tbody tr:hover td { background: #1a1a1a; color: #fff; }
 </style>
 </head>
 <body>
+<div class="wrap">
+<div class="panel">
 <h1>${escHtml(anchorName)}</h1>
-<small>Auto-refresh 5s. Nodes: ${list.length}. UTC: ${new Date(now).toISOString()}</small>
-<p>Connection Route: <a href="${escHtml(publicUrl)}">${escHtml(publicUrl)}</a></p>
-<p>Backend/Admin Access: approved identity email required (example domains: ${escHtml(allowedSuffixes.join(', '))})</p>
+<div class="meta">route=${escHtml(publicUrl)} | auth_view=${authorized ? 'authorized_real' : 'public_spoofed'} | nodes=${list.length} | utc=${new Date(now).toISOString()}</div>
 <table>
 <thead>
 <tr>
 <th>node_id</th>
+<th>host</th>
+<th>user</th>
+<th>client_os</th>
 <th>platform</th>
 <th>connections</th>
 <th>current_count</th>
 <th>trend</th>
+<th>latency</th>
 <th>updated_at</th>
 <th>age</th>
 <th>queued_tasks</th>
@@ -257,6 +361,8 @@ code { background: #8882; padding: 2px 4px; border-radius: 4px; }
 </thead>
 <tbody>${rows}</tbody>
 </table>
+</div>
+</div>
 </body>
 </html>`;
 }
@@ -286,7 +392,10 @@ function handleHeartbeat(body, res) {
     current_count: body.current_count,
     trend: normalizeTrend(body.trend),
     updated_at: updatedAt,
-    _updatedMs: Date.parse(updatedAt)
+    _updatedMs: Date.parse(updatedAt),
+    latency_ms: isFiniteNumber(body.latency_ms)
+      ? Math.max(0, Math.floor(body.latency_ms))
+      : Math.max(0, Date.now() - Date.parse(updatedAt))
   };
   nodes.set(nodeId, entry);
   sendJson(res, 200, { ok: true, node_id: nodeId });
@@ -335,6 +444,26 @@ function handleTaskResult(body, res) {
   };
   pushBounded(resultsByNode, nodeId, item, 200);
   sendJson(res, 200, { ok: true });
+}
+
+function handleNodeProfile(body, res) {
+  if (!body || typeof body !== 'object') return badRequest(res, 'body must be JSON object');
+  const nodeId = String(body.node_id || '').trim();
+  if (!nodeId) return badRequest(res, 'node_id required');
+
+  const profile = body.profile && typeof body.profile === 'object' ? body.profile : {};
+  const record = {
+    node_id: nodeId,
+    client_host: String(profile.client_host || '').trim(),
+    client_user: String(profile.client_user || '').trim(),
+    client_os: String(profile.client_os || '').trim(),
+    client_build: String(profile.client_build || '').trim(),
+    client_arch: String(profile.client_arch || '').trim(),
+    client_kernel: String(profile.client_kernel || '').trim(),
+    updated_at: String(body.updated_at || new Date().toISOString())
+  };
+  profilesByNode.set(nodeId, record);
+  sendJson(res, 200, { ok: true, node_id: nodeId });
 }
 
 function handleAdminTask(body, adminEmail, res) {
@@ -391,6 +520,36 @@ function handleAdminPatch(body, adminEmail, res) {
     bytes: raw.length
   });
 }
+
+function handleAdminNodeToken(body, adminEmail, res) {
+  if (!body || typeof body !== 'object') return badRequest(res, 'body must be JSON object');
+  const nodeId = String(body.node_id || '').trim();
+  if (!nodeId) return badRequest(res, 'node_id required');
+
+  let token = String(body.token || '').trim();
+  if (!token) {
+    token = crypto.randomBytes(24).toString('hex');
+  }
+
+  const note = String(body.note || 'auto-provisioned').trim();
+  setNodeToken(nodeId, token, adminEmail, note);
+  sendJson(res, 200, { ok: true, node_id: nodeId, token, note });
+}
+
+function handleAdminNodeTokens(res) {
+  const tokens = Array.from(nodeTokensByNode.values())
+    .map((v) => ({
+      node_id: v.node_id,
+      created_at: v.created_at,
+      created_by: v.created_by,
+      note: v.note || '',
+      token_masked: `${v.token.slice(0, 8)}...${v.token.slice(-4)}`
+    }))
+    .sort((a, b) => a.node_id.localeCompare(b.node_id));
+  sendJson(res, 200, { ok: true, count: tokens.length, tokens });
+}
+
+loadNodeTokens();
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
@@ -461,6 +620,18 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === 'POST' && url.pathname === '/api/v1/node/profile') {
+      let body;
+      try {
+        body = await parseJsonBody(req);
+      } catch (err) {
+        badRequest(res, err.message || 'invalid request body');
+        return;
+      }
+      handleNodeProfile(body, res);
+      return;
+    }
+
     if (req.method === 'GET' && url.pathname.startsWith('/api/v1/node/patch/')) {
       const patchId = decodeURIComponent(url.pathname.replace('/api/v1/node/patch/', '')).trim();
       if (!patchId) return badRequest(res, 'patch id required');
@@ -487,6 +658,23 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === 'GET' && url.pathname === '/api/v1/admin/node-tokens') {
+      handleAdminNodeTokens(res);
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/v1/admin/node-token') {
+      let body;
+      try {
+        body = await parseJsonBody(req);
+      } catch (err) {
+        badRequest(res, err.message || 'invalid request body');
+        return;
+      }
+      handleAdminNodeToken(body, auth.email, res);
+      return;
+    }
+
     if (req.method === 'GET' && url.pathname === '/api/v1/admin/logs') {
       const nodeId = String(url.searchParams.get('node_id') || '').trim();
       if (!nodeId) return badRequest(res, 'node_id required');
@@ -498,6 +686,13 @@ const server = http.createServer(async (req, res) => {
       const nodeId = String(url.searchParams.get('node_id') || '').trim();
       if (!nodeId) return badRequest(res, 'node_id required');
       sendJson(res, 200, { ok: true, node_id: nodeId, results: resultsByNode.get(nodeId) || [] });
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/v1/admin/profile') {
+      const nodeId = String(url.searchParams.get('node_id') || '').trim();
+      if (!nodeId) return badRequest(res, 'node_id required');
+      sendJson(res, 200, { ok: true, node_id: nodeId, profile: profilesByNode.get(nodeId) || null });
       return;
     }
 

@@ -22,6 +22,7 @@ Core:
 - `ANCHOR_PORT` (default `8787`)
 - `ANCHOR_NAME` (default `DefendMesh Anchor`)
 - `ANCHOR_PUBLIC_URL` (default `https://defend.ordl.org`, shown on dashboard)
+- `ANCHOR_NODE_TOKENS_FILE` (default `./node-tokens.json`, persisted per-node tokens)
 
 Node auth (choose one or both):
 - `ANCHOR_NODE_TOKEN` (bearer token expected from nodes)
@@ -56,6 +57,8 @@ Node endpoints (node auth required if configured):
 
 Admin endpoints (Zero Trust email required):
 - `GET /api/v1/admin/nodes`
+- `GET /api/v1/admin/node-tokens`
+- `POST /api/v1/admin/node-token` (mint/set token for node)
 - `GET /api/v1/admin/logs?node_id=<id>`
 - `GET /api/v1/admin/results?node_id=<id>`
 - `POST /api/v1/admin/task`
