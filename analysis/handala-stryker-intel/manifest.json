@@ -1,0 +1,173 @@
+{
+  "generated_at": "2026-03-12T14:34:05-04:00",
+  "repo_name": "Open-Research-Development-Laboratories/ordl-infra",
+  "repo_root": "/development/ordl-infra",
+  "commit": "6948df93106066cc01b0f469a6d1b9551d49d1f8",
+  "branch": "main",
+  "search_query": "Handala OR Stryker",
+  "search_pattern": "handala|stryker",
+  "matched_file_count": 12,
+  "matched_line_count": 58,
+  "term_occurrence_count": 66,
+  "files": [
+    {
+      "document_id": "HANDALA-RESPONSE.md",
+      "relative_path": "HANDALA-RESPONSE.md",
+      "absolute_path": "/development/ordl-infra/HANDALA-RESPONSE.md",
+      "size_bytes": 230,
+      "sha256": "cf51ce179c8990a853f53af6d25f166334b11591da0242de61f744f42faaca3c",
+      "line_count": 11,
+      "terms_present": [
+        "handala"
+      ],
+      "term_occurrences": 1,
+      "match_line_count": 1
+    },
+    {
+      "document_id": "README.md",
+      "relative_path": "README.md",
+      "absolute_path": "/development/ordl-infra/README.md",
+      "size_bytes": 399,
+      "sha256": "00bf3fe4cb323ba58ea5f0bb0ec193f7ba78cf5a257b51670e6100125ff8864d",
+      "line_count": 12,
+      "terms_present": [
+        "handala",
+        "stryker"
+      ],
+      "term_occurrences": 4,
+      "match_line_count": 2
+    },
+    {
+      "document_id": "STRYKER-INCIDENT-RESPONSE.md",
+      "relative_path": "STRYKER-INCIDENT-RESPONSE.md",
+      "absolute_path": "/development/ordl-infra/STRYKER-INCIDENT-RESPONSE.md",
+      "size_bytes": 221,
+      "sha256": "08a191d6de08c071d5892b9ada4a37a3aa749437429c540a2814868e4824990c",
+      "line_count": 11,
+      "terms_present": [
+        "stryker"
+      ],
+      "term_occurrences": 1,
+      "match_line_count": 1
+    },
+    {
+      "document_id": "handala-security/Detect-HandalaThreats.ps1",
+      "relative_path": "handala-security/Detect-HandalaThreats.ps1",
+      "absolute_path": "/development/ordl-infra/handala-security/Detect-HandalaThreats.ps1",
+      "size_bytes": 15119,
+      "sha256": "f5eab571cde4de7e88eef953f310a76fee07b4b0b0a1b38b0444e8fdb8f1ecb9",
+      "line_count": 410,
+      "terms_present": [
+        "handala",
+        "stryker"
+      ],
+      "term_occurrences": 7,
+      "match_line_count": 4
+    },
+    {
+      "document_id": "handala-security/Protect-SurgicalCenter.ps1",
+      "relative_path": "handala-security/Protect-SurgicalCenter.ps1",
+      "absolute_path": "/development/ordl-infra/handala-security/Protect-SurgicalCenter.ps1",
+      "size_bytes": 15164,
+      "sha256": "eeb3f5907e1a9ac5c62e459518a547596ae671737bdfe7278bb65494823f99e1",
+      "line_count": 321,
+      "terms_present": [
+        "handala",
+        "stryker"
+      ],
+      "term_occurrences": 4,
+      "match_line_count": 3
+    },
+    {
+      "document_id": "handala-security/Restore-Hardening.ps1",
+      "relative_path": "handala-security/Restore-Hardening.ps1",
+      "absolute_path": "/development/ordl-infra/handala-security/Restore-Hardening.ps1",
+      "size_bytes": 20449,
+      "sha256": "cfb53a9cb61a068154877c800315dade2fc84df5f316d26079097585ba855aa5",
+      "line_count": 468,
+      "terms_present": [
+        "handala"
+      ],
+      "term_occurrences": 6,
+      "match_line_count": 6
+    },
+    {
+      "document_id": "stryker-response-kit/RUNBOOK.md",
+      "relative_path": "stryker-response-kit/RUNBOOK.md",
+      "absolute_path": "/development/ordl-infra/stryker-response-kit/RUNBOOK.md",
+      "size_bytes": 5520,
+      "sha256": "ff4eb6d628d6ac38e36680d5266785fcd73b1543a6c9da1eb46e8c0e7cac9bd3",
+      "line_count": 151,
+      "terms_present": [
+        "stryker"
+      ],
+      "term_occurrences": 20,
+      "match_line_count": 18
+    },
+    {
+      "document_id": "stryker-response-kit/build-federal-package.ps1",
+      "relative_path": "stryker-response-kit/build-federal-package.ps1",
+      "absolute_path": "/development/ordl-infra/stryker-response-kit/build-federal-package.ps1",
+      "size_bytes": 19740,
+      "sha256": "a20c0bc2e85a8c7e74d02afbac681f2cfed4d215a2a83fce8ead852b533baedc",
+      "line_count": 488,
+      "terms_present": [
+        "stryker"
+      ],
+      "term_occurrences": 6,
+      "match_line_count": 6
+    },
+    {
+      "document_id": "stryker-response-kit/defend-stryker-local.ps1",
+      "relative_path": "stryker-response-kit/defend-stryker-local.ps1",
+      "absolute_path": "/development/ordl-infra/stryker-response-kit/defend-stryker-local.ps1",
+      "size_bytes": 9867,
+      "sha256": "77a95f54e49f66a65576ca552f30dc790330d4bf471febbb99e10f2bc2ca2a97",
+      "line_count": 257,
+      "terms_present": [
+        "stryker"
+      ],
+      "term_occurrences": 7,
+      "match_line_count": 7
+    },
+    {
+      "document_id": "stryker-response-kit/detect-stryker-local.ps1",
+      "relative_path": "stryker-response-kit/detect-stryker-local.ps1",
+      "absolute_path": "/development/ordl-infra/stryker-response-kit/detect-stryker-local.ps1",
+      "size_bytes": 11785,
+      "sha256": "9490516f0205bf68ad051c37ade0dcb80cf2069dd3e625f54f41922141416eb8",
+      "line_count": 317,
+      "terms_present": [
+        "stryker"
+      ],
+      "term_occurrences": 1,
+      "match_line_count": 1
+    },
+    {
+      "document_id": "stryker-response-kit/federal-triage-template.txt",
+      "relative_path": "stryker-response-kit/federal-triage-template.txt",
+      "absolute_path": "/development/ordl-infra/stryker-response-kit/federal-triage-template.txt",
+      "size_bytes": 1501,
+      "sha256": "962a8be64abb0674f17fd04eb83700903a465ea27ce2a53e0f7dc24f2b70f22a",
+      "line_count": 56,
+      "terms_present": [
+        "stryker"
+      ],
+      "term_occurrences": 2,
+      "match_line_count": 2
+    },
+    {
+      "document_id": "stryker-response-kit/reverse-stryker-defense.ps1",
+      "relative_path": "stryker-response-kit/reverse-stryker-defense.ps1",
+      "absolute_path": "/development/ordl-infra/stryker-response-kit/reverse-stryker-defense.ps1",
+      "size_bytes": 9309,
+      "sha256": "1698389b5acdbc419a327a895c10467e0cdbad0b5562b88adf2c7dff7e56b999",
+      "line_count": 252,
+      "terms_present": [
+        "stryker"
+      ],
+      "term_occurrences": 7,
+      "match_line_count": 7
+    }
+  ]
+}

@@ -1,0 +1,103 @@
+Preliminary Cybersecurity Vulnerability Report
+Date: March 12, 2026
+
+Subject:
+Publicly accessible source code appears to implement unauthenticated remote control and file retrieval functions for networked Raspberry Pi camera devices.
+
+Intended recipients:
+- CISA / DHS
+- FBI Cyber / CyWatch
+- NSA Cybersecurity
+
+Reporting posture:
+This is a preliminary vulnerability disclosure report, not a confirmed intrusion report.
+
+Reporting entity:
+- Reporter name: [fill in]
+- Organization: [fill in]
+- Email: [fill in]
+- Phone: [fill in]
+- Time zone: America/New_York
+
+Affected public repository:
+- Repository: https://github.com/revalo/pishot
+- Commit reviewed: ec10a72e20b8e573bab0712164e60552690d6d47
+- Commit date: May 14, 2019
+
+Executive summary:
+The reviewed repository contains a Flask-based slave server that listens on all network interfaces and exposes remote-control endpoints for reboot, image capture, shutter open/close, and file download without request authentication. The project also uses a shared secret, but the reviewed code shows that the value is used to derive a Dweepy discovery-channel name rather than to authenticate requests to the exposed HTTP endpoints.
+
+If deployed on a reachable network, the implementation could allow unauthorized parties with network access to:
+- Reboot devices
+- Trigger captures
+- Open or close shutters
+- Download generated recording files
+
+At this time, I have not identified evidence of:
+- active exploitation in the wild
+- command-and-control infrastructure
+- threat-actor attribution
+- malware payload delivery
+- victim telemetry
+
+Technical findings:
+1. Unauthenticated routes are exposed:
+   /ping, /reboot, /capture, /open, /close, /download
+   Evidence: /tmp/pishot-ec10/server.py lines 94-129
+
+2. The server binds to all interfaces:
+   app.run(host="0.0.0.0", port=5000)
+   Evidence: /tmp/pishot-ec10/server.py line 160
+
+3. The reboot route directly invokes a system reboot:
+   os.system('reboot now')
+   Evidence: /tmp/pishot-ec10/server.py lines 98-101
+
+4. The shared secret is used for discovery naming, not endpoint authentication:
+   Evidence: /tmp/pishot-ec10/utils.py lines 16-23
+   Evidence: /tmp/pishot-ec10/server.py lines 63-91
+   Evidence: /tmp/pishot-ec10/master.py lines 27-63
+
+5. Device control uses plain HTTP:
+   Evidence: /tmp/pishot-ec10/master.py lines 24-25 and 126-250
+
+6. The code reaches out to an external UUID generator:
+   Evidence: /tmp/pishot-ec10/server.py lines 53-59
+
+Risk assessment:
+- Likely impact if deployed insecurely:
+  - unauthorized remote reboot of devices
+  - unauthorized triggering or interruption of capture operations
+  - unauthorized retrieval of generated media files
+  - exposure of a remotely controllable device fleet if the service is reachable from untrusted networks
+
+- Constraints:
+  - the README describes this as a Raspberry Pi camera project on a local network or GPIO chain
+  - the available evidence does not establish public internet exposure
+  - the available evidence does not establish malicious intent by the author
+
+Requested action:
+- Treat this as a secure-by-default / insecure deployment risk disclosure, not a confirmed nation-state or criminal incident.
+- If appropriate, notify the maintainer or coordinate responsible disclosure.
+- If related deployments are found in critical infrastructure or public-facing networks, assess exposure and downstream operational impact.
+
+Recommended mitigations:
+- Add request authentication to all control endpoints.
+- Bind by default to localhost or a private management interface.
+- Require TLS or an authenticated reverse proxy for remote access.
+- Remove or restrict the reboot endpoint.
+- Replace unauthenticated device discovery/control with authenticated enrollment.
+- Avoid external UUID generation for device identity.
+
+Current official reporting channels checked on March 12, 2026:
+- CISA / DHS:
+  - https://www.cisa.gov/report
+  - Contact@cisa.dhs.gov
+  - 1-844-729-2472
+- FBI:
+  - https://www.ic3.gov
+  - CyWatch@fbi.gov
+  - 1-855-292-3937
+- NSA:
+  - https://www.nsa.gov/Cybersecurity/Contact-Us/
+  - Cybersecurity_Requests@nsa.gov

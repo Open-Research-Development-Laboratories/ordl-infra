@@ -1,0 +1,386 @@
+{
+  "source": {
+    "repo_name": "Open-Research-Development-Laboratories/ordl-infra",
+    "repo_root": "/development/ordl-infra",
+    "commit": "6948df93106066cc01b0f469a6d1b9551d49d1f8",
+    "query": "Handala OR Stryker",
+    "matched_file_count": 12,
+    "matched_line_count": 58,
+    "term_occurrence_count": 66
+  },
+  "actors": {
+    "handala": {
+      "repo_derived_profile": {
+        "confirmed_focus_areas": [
+          {
+            "item": "Mass Intune wipe detection over a 5-minute window",
+            "support": "supported",
+            "evidence": [
+              {
+                "path": "handala-security/Detect-HandalaThreats.ps1",
+                "start_line": 81,
+                "end_line": 137
+              }
+            ]
+          },
+          {
+            "item": "Suspicious Azure AD administrative sign-in detection",
+            "support": "supported",
+            "evidence": [
+              {
+                "path": "handala-security/Detect-HandalaThreats.ps1",
+                "start_line": 139,
+                "end_line": 199
+              }
+            ]
+          },
+          {
+            "item": "OAuth app consent abuse detection",
+            "support": "supported",
+            "evidence": [
+              {
+                "path": "handala-security/Detect-HandalaThreats.ps1",
+                "start_line": 202,
+                "end_line": 258
+              }
+            ]
+          },
+          {
+            "item": "EMR access anomaly detection",
+            "support": "supported",
+            "evidence": [
+              {
+                "path": "handala-security/Detect-HandalaThreats.ps1",
+                "start_line": 262,
+                "end_line": 324
+              }
+            ]
+          },
+          {
+            "item": "Clinical device disconnect alerting",
+            "support": "supported",
+            "evidence": [
+              {
+                "path": "handala-security/Detect-HandalaThreats.ps1",
+                "start_line": 326,
+                "end_line": 383
+              }
+            ]
+          },
+          {
+            "item": "Intune hardening and device-action restriction",
+            "support": "supported",
+            "evidence": [
+              {
+                "path": "handala-security/Protect-SurgicalCenter.ps1",
+                "start_line": 65,
+                "end_line": 107
+              }
+            ]
+          },
+          {
+            "item": "Azure AD admin hardening with MFA and geo restriction",
+            "support": "supported",
+            "evidence": [
+              {
+                "path": "handala-security/Protect-SurgicalCenter.ps1",
+                "start_line": 109,
+                "end_line": 179
+              }
+            ]
+          },
+          {
+            "item": "Scheduled detection task running as SYSTEM every 5 minutes",
+            "support": "supported",
+            "evidence": [
+              {
+                "path": "handala-security/Protect-SurgicalCenter.ps1",
+                "start_line": 267,
+                "end_line": 321
+              }
+            ]
+          }
+        ],
+        "weak_or_doc_only_items": [
+          {
+            "item": "Suspicious PowerShell execution from SYSTEM",
+            "support": "partial",
+            "reason": "Mentioned in summary documentation, not implemented as dedicated logic in the matched corpus.",
+            "evidence": [
+              {
+                "path": "HANDALA-RESPONSE.md",
+                "start_line": 3,
+                "end_line": 10
+              }
+            ]
+          },
+          {
+            "item": "Unexpected lateral movement",
+            "support": "partial",
+            "reason": "Mentioned in summary documentation, not implemented as dedicated logic in the matched corpus.",
+            "evidence": [
+              {
+                "path": "HANDALA-RESPONSE.md",
+                "start_line": 3,
+                "end_line": 10
+              }
+            ]
+          },
+          {
+            "item": "Credential harvesting patterns",
+            "support": "partial",
+            "reason": "Mentioned in summary documentation, not implemented as dedicated logic in the matched corpus.",
+            "evidence": [
+              {
+                "path": "HANDALA-RESPONSE.md",
+                "start_line": 3,
+                "end_line": 10
+              }
+            ]
+          }
+        ],
+        "not_found_in_repo": [
+          "Cloud-to-on-prem trust-path exploitation logic",
+          "Conditional access removal detection",
+          "Audit-log deletion detection",
+          "Direct historical attribution or actor linkage"
+        ]
+      },
+      "claim_assessment": [
+        {
+          "claim": "Compromised Azure AD / Intune administrative credentials are the primary vector.",
+          "support": "partial",
+          "reason": "The repo focuses heavily on Azure AD admin sign-ins and Intune destructive actions, but it does not prove an initial-access vector.",
+          "evidence": [
+            "handala-security/Detect-HandalaThreats.ps1:81-199",
+            "handala-security/Protect-SurgicalCenter.ps1:65-179"
+          ]
+        },
+        {
+          "claim": "Mass device wipes are part of the pattern.",
+          "support": "supported",
+          "reason": "Exact detection and emergency restriction logic are present.",
+          "evidence": [
+            "handala-security/Detect-HandalaThreats.ps1:81-137",
+            "handala-security/Protect-SurgicalCenter.ps1:65-107"
+          ]
+        },
+        {
+          "claim": "Azure AD policy tampering and conditional access removal are monitored.",
+          "support": "not_found",
+          "reason": "The repo creates and restores policy objects but does not implement a dedicated removal-detection path in the matched corpus.",
+          "evidence": [
+            "handala-security/Protect-SurgicalCenter.ps1:149-170",
+            "handala-security/Restore-Hardening.ps1:158-218"
+          ]
+        },
+        {
+          "claim": "Test-SuspiciousAdminLogin exposes a -RiskyCountries parameter.",
+          "support": "not_found",
+          "reason": "The function hardcodes a risky-country list and does not define that parameter.",
+          "evidence": [
+            "handala-security/Detect-HandalaThreats.ps1:140-146"
+          ]
+        }
+      ]
+    },
+    "stryker": {
+      "repo_derived_profile": {
+        "confirmed_focus_areas": [
+          {
+            "item": "Remote-support software footprinting across installed programs, services, and processes",
+            "support": "supported",
+            "evidence": [
+              {
+                "path": "stryker-response-kit/detect-stryker-local.ps1",
+                "start_line": 84,
+                "end_line": 140
+              }
+            ]
+          },
+          {
+            "item": "Established public TCP connection collection",
+            "support": "supported",
+            "evidence": [
+              {
+                "path": "stryker-response-kit/detect-stryker-local.ps1",
+                "start_line": 142,
+                "end_line": 176
+              }
+            ]
+          },
+          {
+            "item": "Local user, firewall, DNS, SMB, and RDP / Remote Assistance triage",
+            "support": "supported",
+            "evidence": [
+              {
+                "path": "stryker-response-kit/detect-stryker-local.ps1",
+                "start_line": 216,
+                "end_line": 317
+              }
+            ]
+          },
+          {
+            "item": "Collection of Security, service-install, Task Scheduler, PowerShell, Defender, and RDP events",
+            "support": "supported",
+            "evidence": [
+              {
+                "path": "stryker-response-kit/detect-stryker-local.ps1",
+                "start_line": 178,
+                "end_line": 317
+              }
+            ]
+          },
+          {
+            "item": "Containment via RDP disablement, Remote Assistance disablement, and remote-support executable blocking",
+            "support": "supported",
+            "evidence": [
+              {
+                "path": "stryker-response-kit/defend-stryker-local.ps1",
+                "start_line": 197,
+                "end_line": 247
+              }
+            ]
+          },
+          {
+            "item": "Local vendor account disable / re-enable workflow",
+            "support": "supported",
+            "evidence": [
+              {
+                "path": "stryker-response-kit/defend-stryker-local.ps1",
+                "start_line": 147,
+                "end_line": 175
+              },
+              {
+                "path": "stryker-response-kit/reverse-stryker-defense.ps1",
+                "start_line": 179,
+                "end_line": 207
+              }
+            ]
+          },
+          {
+            "item": "Federal package generation with EVTX exports, hashes, raw snapshots, and a draft report",
+            "support": "supported",
+            "evidence": [
+              {
+                "path": "stryker-response-kit/build-federal-package.ps1",
+                "start_line": 154,
+                "end_line": 410
+              }
+            ]
+          }
+        ],
+        "weak_or_partial_items": [
+          {
+            "item": "Process chain analysis",
+            "support": "partial",
+            "reason": "The detector captures process metadata and parent process IDs, but not the exact 4688-centric process-tree command provided by the user.",
+            "evidence": [
+              {
+                "path": "stryker-response-kit/detect-stryker-local.ps1",
+                "start_line": 123,
+                "end_line": 140
+              },
+              {
+                "path": "STRYKER-INCIDENT-RESPONSE.md",
+                "start_line": 3,
+                "end_line": 10
+              }
+            ]
+          },
+          {
+            "item": "Vendor-linked downstream trust-path exposure",
+            "support": "partial",
+            "reason": "The federal draft references Stryker-connected trust paths and vendor-linked disruption, but no provenance model is implemented.",
+            "evidence": [
+              {
+                "path": "stryker-response-kit/build-federal-package.ps1",
+                "start_line": 274,
+                "end_line": 329
+              },
+              {
+                "path": "stryker-response-kit/RUNBOOK.md",
+                "start_line": 1,
+                "end_line": 16
+              }
+            ]
+          },
+          {
+            "item": "Scheduled-task persistence hunting",
+            "support": "partial",
+            "reason": "The detector collects Task Scheduler events, but does not encode actor-specific persistence logic.",
+            "evidence": [
+              {
+                "path": "stryker-response-kit/detect-stryker-local.ps1",
+                "start_line": 178,
+                "end_line": 185
+              }
+            ]
+          },
+          {
+            "item": "HTTPS to public IPs",
+            "support": "partial",
+            "reason": "The detector captures public established TCP connections generally, not HTTPS specifically.",
+            "evidence": [
+              {
+                "path": "stryker-response-kit/detect-stryker-local.ps1",
+                "start_line": 142,
+                "end_line": 176
+              }
+            ]
+          }
+        ],
+        "not_found_in_repo": [
+          "Historical-vs-current behavior differential model",
+          "Explicit EDR bypass or Defender disablement actor logic",
+          "Direct actor-side ransomware or exfiltration workflow",
+          "Negative claims about what Stryker does not do"
+        ]
+      },
+      "claim_assessment": [
+        {
+          "claim": "Remote support tools are the primary investigation surface.",
+          "support": "supported",
+          "reason": "The detector and containment scripts explicitly enumerate and act on common remote-support software.",
+          "evidence": [
+            "stryker-response-kit/detect-stryker-local.ps1:84-140",
+            "stryker-response-kit/defend-stryker-local.ps1:70-145"
+          ]
+        },
+        {
+          "claim": "Vendor account maintenance matters operationally.",
+          "support": "supported",
+          "reason": "The containment and reversal scripts explicitly disable and re-enable listed local vendor accounts.",
+          "evidence": [
+            "stryker-response-kit/defend-stryker-local.ps1:147-175",
+            "stryker-response-kit/reverse-stryker-defense.ps1:179-207"
+          ]
+        },
+        {
+          "claim": "The repo provides a 4688 process-chain query.",
+          "support": "not_found",
+          "reason": "That exact query is not present in the matched corpus.",
+          "evidence": [
+            "stryker-response-kit/detect-stryker-local.ps1:246-317"
+          ]
+        },
+        {
+          "claim": "The repo documents direct behavioral evolution from historical Stryker to current Stryker.",
+          "support": "not_found",
+          "reason": "No timeline comparison model or historical actor baseline exists in the matched corpus.",
+          "evidence": [
+            "STRYKER-INCIDENT-RESPONSE.md:1-10",
+            "stryker-response-kit/RUNBOOK.md:1-151"
+          ]
+        }
+      ]
+    }
+  },
+  "global_gaps": [
+    "Initial access is not established.",
+    "Live command-and-control infrastructure is not present.",
+    "Direct actor attribution is not proven by the repo.",
+    "Data exfiltration destinations are not identified.",
+    "Negative assertions about what the actors do not do are not substantiated by the repo."
+  ]
+}

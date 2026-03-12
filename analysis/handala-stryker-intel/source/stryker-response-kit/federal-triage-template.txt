@@ -1,0 +1,56 @@
+Incident title: Potential downstream impact from Stryker network disruption
+Facility name:
+Facility address:
+Primary contact:
+Primary contact role:
+Primary contact phone:
+Primary contact email:
+
+Date/time first observed (local timezone):
+Date/time reported internally:
+Reason for report:
+
+Stryker products/services in use:
+- Product:
+  Networked or local:
+  Patient critical / business critical / optional:
+
+Observed symptoms:
+- Exact symptom:
+  Start time:
+  Affected asset or user:
+  Ongoing or contained:
+
+Patient care impact:
+- None / delays / canceled cases / backup workflow used / patient safety concern
+- Estimated number of affected cases:
+
+Security impact observed locally:
+- Unexpected login / MFA reset / new account / remote support session / abnormal outbound traffic / device malfunction / none seen
+- Source IPs, hostnames, usernames, VLANs, serial numbers:
+
+Containment actions taken:
+- Disabled vendor access:
+- Isolated segment or host:
+- Switched to local or manual mode:
+- Preserved logs or images:
+
+Data impact:
+- No evidence / possible PHI or PII exposure / unknown
+
+Evidence available:
+- Firewall logs:
+- Windows event logs:
+- EDR alerts:
+- Entra or M365 logs:
+- Screenshots:
+- Chain of custody notes:
+
+Assistance requested:
+- IOC comparison / incident coordination / triage support / healthcare sector notification
+
+Federal reporting targets:
+- CISA: 844-729-2472
+- FBI CyWatch: 855-292-3937
+- HHS HC3: HC3@hhs.gov
+- FDA MedWatch if patient safety or device issue is involved

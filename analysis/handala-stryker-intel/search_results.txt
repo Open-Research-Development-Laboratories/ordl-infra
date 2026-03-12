@@ -1,0 +1,58 @@
+HANDALA-RESPONSE.md:1:# Handala Threat Response
+README.md:1:# ORDL Infrastructure - Handala & Stryker Defense
+README.md:5:This repository contains production-ready defensive infrastructure for detecting and remediating **Handala exploits** and **Stryker incidents** affecting organizations globally.
+STRYKER-INCIDENT-RESPONSE.md:1:# Stryker Incident Response
+handala-security/Detect-HandalaThreats.ps1:115:This pattern matches the Stryker/Handala attack methodology.
+handala-security/Detect-HandalaThreats.ps1:386:    Write-DetectionLog -Level "INFO" -Message "=== Starting Handala/Stryker Detection Suite ===" -EventId "START-001"
+handala-security/Detect-HandalaThreats.ps1:7:    Handala/Stryker-Style Wiper Attack Detection Suite
+handala-security/Detect-HandalaThreats.ps1:95:                Title = "HANDALA-STYLE MASS WIPE DETECTED"
+handala-security/Protect-SurgicalCenter.ps1:278:        $action = New-ScheduledTaskAction -Execute "PowerShell.exe" -Argument "-ExecutionPolicy Bypass -File C:\SurgicalCenter\Security\Scripts\Detect-HandalaThreats.ps1"
+handala-security/Protect-SurgicalCenter.ps1:283:        Register-ScheduledTask -TaskName "SC-HandalaDetection" -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force
+handala-security/Protect-SurgicalCenter.ps1:8:    Implements defenses against Handala/Stryker-style wiper attacks
+handala-security/Restore-Hardening.ps1:14:    - Detect-HandalaThreats.ps1 (scheduled tasks)
+handala-security/Restore-Hardening.ps1:273:        Write-Host "WHATIF: Would remove SC-HandalaDetection scheduled task" -ForegroundColor Cyan
+handala-security/Restore-Hardening.ps1:278:        $task = Get-ScheduledTask -TaskName "SC-HandalaDetection" -ErrorAction SilentlyContinue
+handala-security/Restore-Hardening.ps1:281:            Write-Host "`nScheduled detection task found: SC-HandalaDetection" -ForegroundColor Yellow
+handala-security/Restore-Hardening.ps1:288:                    Disable-ScheduledTask -TaskName "SC-HandalaDetection"
+handala-security/Restore-Hardening.ps1:292:                    Unregister-ScheduledTask -TaskName "SC-HandalaDetection" -Confirm:$false
+stryker-response-kit/RUNBOOK.md:103:.\\reverse-stryker-defense.ps1 -RestoreInboundRdp -RestoreRemoteAssistance -RemoveTemporaryFirewallRules -WhatIf
+stryker-response-kit/RUNBOOK.md:111:.\\build-federal-package.ps1 -DetectionDir .\\stryker-detect-20260312-130000 -ContainmentDir .\\stryker-defend-20260312-131500 -HoursBack 72 -CreateZip
+stryker-response-kit/RUNBOOK.md:118:  -DetectionDir .\\stryker-detect-20260312-130000 `
+stryker-response-kit/RUNBOOK.md:119:  -ContainmentDir .\\stryker-defend-20260312-131500 `
+stryker-response-kit/RUNBOOK.md:11:- `reverse-stryker-defense.ps1`
+stryker-response-kit/RUNBOOK.md:1:# Stryker Local Response Kit
+stryker-response-kit/RUNBOOK.md:32:.\\detect-stryker-local.ps1 -HoursBack 72
+stryker-response-kit/RUNBOOK.md:3:This kit does not patch Stryker devices or vendor systems. It is for your facility side only.
+stryker-response-kit/RUNBOOK.md:53:.\\defend-stryker-local.ps1
+stryker-response-kit/RUNBOOK.md:59:.\\defend-stryker-local.ps1 -BlockInboundRdp -DisableRemoteAssistance
+stryker-response-kit/RUNBOOK.md:65:.\\defend-stryker-local.ps1 -BlockInboundRdp -DisableRemoteAssistance -BlockCommonRemoteSupportTools
+stryker-response-kit/RUNBOOK.md:71:.\\defend-stryker-local.ps1 -VendorAccountsFile .\\vendor-accounts.txt
+stryker-response-kit/RUNBOOK.md:77:.\\defend-stryker-local.ps1 -BlockInboundRdp -DisableRemoteAssistance -WhatIf
+stryker-response-kit/RUNBOOK.md:7:- `detect-stryker-local.ps1`
+stryker-response-kit/RUNBOOK.md:85:.\\reverse-stryker-defense.ps1 -RestoreInboundRdp -RestoreRemoteAssistance -RemoveTemporaryFirewallRules
+stryker-response-kit/RUNBOOK.md:91:.\\reverse-stryker-defense.ps1 -VendorAccountsFile .\\vendor-accounts.txt
+stryker-response-kit/RUNBOOK.md:97:.\\reverse-stryker-defense.ps1 -ResponseDir .\\stryker-defend-20260312-130000 -RestoreInboundRdp -RestoreRemoteAssistance -RemoveTemporaryFirewallRules
+stryker-response-kit/RUNBOOK.md:9:- `defend-stryker-local.ps1`
+stryker-response-kit/build-federal-package.ps1:13:    [string]$OutputDir = (Join-Path -Path $PWD -ChildPath ("stryker-federal-" + (Get-Date -Format "yyyyMMdd-HHmmss")))
+stryker-response-kit/build-federal-package.ps1:275:        "Incident title: Potential downstream impact from Stryker network disruption"
+stryker-response-kit/build-federal-package.ps1:288:        "- Possible downstream exposure from Stryker-connected trust paths or vendor-linked disruption."
+stryker-response-kit/build-federal-package.ps1:303:        "- Review defend-stryker-local.ps1 output and actions.log if containment has been run."
+stryker-response-kit/build-federal-package.ps1:398:            $_.DisplayGroup -in @("Remote Desktop", "Remote Assistance", "Stryker Response Temporary") -or
+stryker-response-kit/build-federal-package.ps1:399:            $_.DisplayName -like "Stryker Response Block *"
+stryker-response-kit/defend-stryker-local.ps1:119:            DisplayName = "Stryker Response Block OUT $safeName"
+stryker-response-kit/defend-stryker-local.ps1:123:            DisplayName = "Stryker Response Block IN $safeName"
+stryker-response-kit/defend-stryker-local.ps1:137:                -DisplayGroup "Stryker Response Temporary" `
+stryker-response-kit/defend-stryker-local.ps1:208:        $fallbackName = "Stryker Response Block Inbound RDP 3389"
+stryker-response-kit/defend-stryker-local.ps1:212:                -DisplayGroup "Stryker Response Temporary" `
+stryker-response-kit/defend-stryker-local.ps1:62:                Where-Object { $_.DisplayGroup -eq "Stryker Response Temporary" } |
+stryker-response-kit/defend-stryker-local.ps1:7:    [string]$OutputDir = (Join-Path -Path $PWD -ChildPath ("stryker-defend-" + (Get-Date -Format "yyyyMMdd-HHmmss")))
+stryker-response-kit/detect-stryker-local.ps1:4:    [string]$OutputDir = (Join-Path -Path $PWD -ChildPath ("stryker-detect-" + (Get-Date -Format "yyyyMMdd-HHmmss")))
+stryker-response-kit/federal-triage-template.txt:13:Stryker products/services in use:
+stryker-response-kit/federal-triage-template.txt:1:Incident title: Potential downstream impact from Stryker network disruption
+stryker-response-kit/reverse-stryker-defense.ps1:150:            $_.DisplayGroup -eq "Stryker Response Temporary" -or
+stryker-response-kit/reverse-stryker-defense.ps1:151:            $_.DisplayName -like "Stryker Response Block *"
+stryker-response-kit/reverse-stryker-defense.ps1:155:        if ($PSCmdlet.ShouldProcess($rule.DisplayName, "Remove temporary Stryker response firewall rule")) {
+stryker-response-kit/reverse-stryker-defense.ps1:162:        Write-Action "No temporary Stryker response firewall rules found"
+stryker-response-kit/reverse-stryker-defense.ps1:52:                    $_.DisplayGroup -eq "Stryker Response Temporary" -or
+stryker-response-kit/reverse-stryker-defense.ps1:53:                    $_.DisplayName -like "Stryker Response Block *"
+stryker-response-kit/reverse-stryker-defense.ps1:8:    [string]$OutputDir = (Join-Path -Path $PWD -ChildPath ("stryker-reverse-" + (Get-Date -Format "yyyyMMdd-HHmmss")))
