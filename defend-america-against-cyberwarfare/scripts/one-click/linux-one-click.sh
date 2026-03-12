@@ -42,8 +42,15 @@ done
 
 ts="$(date +%Y%m%d-%H%M%S)"
 ENDPOINT_OUT="$REPO_ROOT/output/oneclick-endpoint-$ts"
-MONITOR_OUT="${DEFEND_MONITOR_OUTPUT_DIR:-${HOME:-/tmp}/.defendmesh/live-dashboard}"
-AGENT_OUT="${DEFEND_AGENT_OUTPUT_DIR:-${HOME:-/tmp}/.defendmesh/node-agent}"
+HOME_BASE="${HOME:-/tmp}"
+if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ] && command -v getent >/dev/null 2>&1; then
+  SUDO_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6 | head -n 1 || true)"
+  if [ -n "$SUDO_HOME" ]; then
+    HOME_BASE="$SUDO_HOME"
+  fi
+fi
+MONITOR_OUT="${DEFEND_MONITOR_OUTPUT_DIR:-$HOME_BASE/.defendmesh/live-dashboard}"
+AGENT_OUT="${DEFEND_AGENT_OUTPUT_DIR:-$HOME_BASE/.defendmesh/node-agent}"
 IOC_FILE="$REPO_ROOT/iocs/seed-iocs.txt"
 
 mkdir -p "$MONITOR_OUT" "$AGENT_OUT"

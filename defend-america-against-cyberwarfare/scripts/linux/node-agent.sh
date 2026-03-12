@@ -9,7 +9,14 @@ POLL_SEC=10
 PROFILE_EVERY_SEC="${DEFEND_PROFILE_EVERY_SEC:-600}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-OUTPUT_DIR="${DEFEND_OUTPUT_DIR:-${HOME:-/tmp}/.defendmesh/node-agent}"
+HOME_BASE="${HOME:-/tmp}"
+if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ] && command -v getent >/dev/null 2>&1; then
+  SUDO_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6 | head -n 1 || true)"
+  if [ -n "$SUDO_HOME" ]; then
+    HOME_BASE="$SUDO_HOME"
+  fi
+fi
+OUTPUT_DIR="${DEFEND_OUTPUT_DIR:-$HOME_BASE/.defendmesh/node-agent}"
 
 usage() {
   echo "Usage: node-agent.sh --anchor-url URL|URL1,URL2 [--node-id ID] [--anchor-token TOKEN] [--poll-sec N] [--profile-every-sec N] [--output-dir DIR]"

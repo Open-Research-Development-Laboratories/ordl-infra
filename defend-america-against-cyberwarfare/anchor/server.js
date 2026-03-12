@@ -1146,7 +1146,14 @@ function downloadLinuxScript() {
 set -euo pipefail
 ANCHOR_URL="\${DEFEND_ANCHOR_URL:-${publicUrlBase}}"
 NODE_ID="\${DEFEND_NODE_ID:-$(hostname 2>/dev/null || echo node-linux)}"
-ROOT_DIR="\${DEFEND_ROOT_DIR:-\${HOME:-/tmp}/.defendmesh}"
+HOME_BASE="\${HOME:-/tmp}"
+if [ -n "\${SUDO_USER:-}" ] && [ "\${SUDO_USER}" != "root" ] && command -v getent >/dev/null 2>&1; then
+  SUDO_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6 | head -n 1 || true)"
+  if [ -n "$SUDO_HOME" ]; then
+    HOME_BASE="$SUDO_HOME"
+  fi
+fi
+ROOT_DIR="\${DEFEND_ROOT_DIR:-$HOME_BASE/.defendmesh}"
 MONITOR_OUT="\${DEFEND_MONITOR_OUTPUT_DIR:-$ROOT_DIR/live-dashboard}"
 AGENT_OUT="\${DEFEND_AGENT_OUTPUT_DIR:-$ROOT_DIR/node-agent}"
 WORK_DIR="\${TMPDIR:-/tmp}/defendmesh-bootstrap"
@@ -1154,6 +1161,7 @@ MONITOR="$WORK_DIR/connection-monitor.sh"
 AGENT="$WORK_DIR/node-agent.sh"
 MON_PID_FILE="$MONITOR_OUT/monitor.pid"
 AGENT_PID_FILE="$AGENT_OUT/node-agent.pid"
+FORCE_RESTART="\${DEFEND_FORCE_RESTART:-1}"
 mkdir -p "$WORK_DIR" "$MONITOR_OUT" "$AGENT_OUT"
 
 download_file() {
@@ -1197,8 +1205,16 @@ fi
 if [ -f "$MON_PID_FILE" ]; then
   RUN_PID="$(cat "$MON_PID_FILE" 2>/dev/null || true)"
   if [ -n "$RUN_PID" ] && kill -0 "$RUN_PID" 2>/dev/null; then
-    echo "monitor already running pid=$RUN_PID node=$NODE_ID"
-  else
+    if [ "$FORCE_RESTART" = "1" ]; then
+      kill "$RUN_PID" 2>/dev/null || true
+      sleep 1
+      RUN_PID=""
+      echo "restarting monitor node=$NODE_ID"
+    else
+      echo "monitor already running pid=$RUN_PID node=$NODE_ID"
+    fi
+  fi
+  if [ -z "$RUN_PID" ] || ! kill -0 "$RUN_PID" 2>/dev/null; then
     nohup "$MONITOR" "\${MON_ARGS[@]}" > "$MONITOR_OUT/monitor-stdout.log" 2>&1 &
     MON_PID="$!"
     printf '%s\n' "$MON_PID" > "$MON_PID_FILE"
@@ -1214,8 +1230,16 @@ fi
 if [ -f "$AGENT_PID_FILE" ]; then
   RUN_PID="$(cat "$AGENT_PID_FILE" 2>/dev/null || true)"
   if [ -n "$RUN_PID" ] && kill -0 "$RUN_PID" 2>/dev/null; then
-    echo "node-agent already running pid=$RUN_PID node=$NODE_ID"
-  else
+    if [ "$FORCE_RESTART" = "1" ]; then
+      kill "$RUN_PID" 2>/dev/null || true
+      sleep 1
+      RUN_PID=""
+      echo "restarting node-agent node=$NODE_ID"
+    else
+      echo "node-agent already running pid=$RUN_PID node=$NODE_ID"
+    fi
+  fi
+  if [ -z "$RUN_PID" ] || ! kill -0 "$RUN_PID" 2>/dev/null; then
     nohup "$AGENT" "\${AGENT_ARGS[@]}" > "$AGENT_OUT/node-agent-stdout.log" 2>&1 &
     AGENT_PID="$!"
     printf '%s\n' "$AGENT_PID" > "$AGENT_PID_FILE"
@@ -1246,10 +1270,20 @@ function downloadWindowsScript() {
   return `$ErrorActionPreference = 'Stop'
 $AnchorUrl = if ($env:DEFEND_ANCHOR_URL) { $env:DEFEND_ANCHOR_URL } else { '${publicUrlBase}' }
 $NodeId = if ($env:DEFEND_NODE_ID) { $env:DEFEND_NODE_ID } else { $env:COMPUTERNAME }
-$RootDir = if ($env:DEFEND_ROOT_DIR) { $env:DEFEND_ROOT_DIR } else { Join-Path $env:USERPROFILE '.defendmesh' }
+$HomeBase = $env:USERPROFILE
+if ([string]::IsNullOrWhiteSpace($HomeBase)) {
+  if ($env:HOMEDRIVE -and $env:HOMEPATH) {
+    $HomeBase = '{0}{1}' -f $env:HOMEDRIVE, $env:HOMEPATH
+  } else {
+    $HomeBase = $env:TEMP
+  }
+}
+$RootDir = if ($env:DEFEND_ROOT_DIR) { $env:DEFEND_ROOT_DIR } else { Join-Path $HomeBase '.defendmesh' }
 $MonitorOut = if ($env:DEFEND_MONITOR_OUTPUT_DIR) { $env:DEFEND_MONITOR_OUTPUT_DIR } else { Join-Path $RootDir 'live-dashboard' }
 $AgentOut = if ($env:DEFEND_AGENT_OUTPUT_DIR) { $env:DEFEND_AGENT_OUTPUT_DIR } else { Join-Path $RootDir 'node-agent' }
 $AnchorToken = $env:DEFEND_ANCHOR_TOKEN
+$ForceRestart = $true
+if ($env:DEFEND_FORCE_RESTART -and $env:DEFEND_FORCE_RESTART -match '^(?i:0|false|no)$') { $ForceRestart = $false }
 $TmpRoot = Join-Path $env:TEMP 'defendmesh-bootstrap'
 $MonitorPath = Join-Path $TmpRoot 'connection-monitor.ps1'
 $AgentPath = Join-Path $TmpRoot 'node-agent.ps1'
@@ -1273,7 +1307,15 @@ if (Test-Path -LiteralPath $MonPidFile) {
   try {
     $existingPid = [int](Get-Content -LiteralPath $MonPidFile -ErrorAction Stop | Select-Object -First 1)
     if (Get-Process -Id $existingPid -ErrorAction SilentlyContinue) {
-      Write-Output ('monitor already running pid=' + $existingPid + ' node=' + $NodeId)
+      if ($ForceRestart) {
+        Stop-Process -Id $existingPid -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 600
+        $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList $monArgs -WindowStyle Hidden -PassThru
+        [string]$proc.Id | Set-Content -LiteralPath $MonPidFile -Encoding ASCII
+        Write-Output ('restarted monitor pid=' + $proc.Id + ' node=' + $NodeId + ' anchor=' + $AnchorUrl + ' output=' + $MonitorOut)
+      } else {
+        Write-Output ('monitor already running pid=' + $existingPid + ' node=' + $NodeId)
+      }
     } else {
       $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList $monArgs -WindowStyle Hidden -PassThru
       [string]$proc.Id | Set-Content -LiteralPath $MonPidFile -Encoding ASCII
@@ -1292,7 +1334,15 @@ if (Test-Path -LiteralPath $AgentPidFile) {
   try {
     $existingAgentPid = [int](Get-Content -LiteralPath $AgentPidFile -ErrorAction Stop | Select-Object -First 1)
     if (Get-Process -Id $existingAgentPid -ErrorAction SilentlyContinue) {
-      Write-Output ('node-agent already running pid=' + $existingAgentPid + ' node=' + $NodeId)
+      if ($ForceRestart) {
+        Stop-Process -Id $existingAgentPid -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 600
+        $agentProc = Start-Process -FilePath 'powershell.exe' -ArgumentList $agentArgs -WindowStyle Hidden -PassThru
+        [string]$agentProc.Id | Set-Content -LiteralPath $AgentPidFile -Encoding ASCII
+        Write-Output ('restarted node-agent pid=' + $agentProc.Id + ' node=' + $NodeId + ' anchor=' + $AnchorUrl + ' output=' + $AgentOut)
+      } else {
+        Write-Output ('node-agent already running pid=' + $existingAgentPid + ' node=' + $NodeId)
+      }
     } else {
       $agentProc = Start-Process -FilePath 'powershell.exe' -ArgumentList $agentArgs -WindowStyle Hidden -PassThru
       [string]$agentProc.Id | Set-Content -LiteralPath $AgentPidFile -Encoding ASCII
@@ -1308,49 +1358,53 @@ if (Test-Path -LiteralPath $AgentPidFile) {
 }
 
 function downloadRemoveLinuxScript() {
+  const localPath = downloadLocalAssetMap()['linux-remove.sh'];
+  if (localPath && fs.existsSync(localPath)) {
+    try {
+      return fs.readFileSync(localPath, 'utf8');
+    } catch (_) {
+      // Fall through to inline fallback.
+    }
+  }
   return `#!/usr/bin/env bash
 set -euo pipefail
-HOME_BASE="\${HOME:-/tmp}"
-DEFAULT_ROOT="\${DEFEND_ROOT_DIR:-$HOME_BASE/.defendmesh}"
-WORK_DIR="\${DEFEND_WORK_DIR:-\${TMPDIR:-/tmp}/defendmesh-bootstrap}"
-echo "[1/4] Stopping DefendMesh monitor/agent processes..."
 pkill -f 'connection-monitor.sh' 2>/dev/null || true
 pkill -f 'node-agent.sh' 2>/dev/null || true
-echo "[2/4] Removing bootstrap workspace..."
-rm -rf "$WORK_DIR" 2>/dev/null || true
-echo "[3/4] Removing DefendMesh output directories..."
-rm -rf "$DEFAULT_ROOT" 2>/dev/null || true
-rm -rf "./output/live-dashboard" "./output/node-agent" "./output/oneclick-live-dashboard" "./output/oneclick-node-agent" 2>/dev/null || true
-echo "[4/4] Removal complete."
+rm -rf "\${HOME:-/tmp}/.defendmesh" "\${TMPDIR:-/tmp}/defendmesh-bootstrap" 2>/dev/null || true
+echo "Removal complete."
 `;
 }
 
 function downloadRemoveMacosScript() {
+  const localPath = downloadLocalAssetMap()['macos-remove.sh'];
+  if (localPath && fs.existsSync(localPath)) {
+    try {
+      return fs.readFileSync(localPath, 'utf8');
+    } catch (_) {
+      // Fall through to linux fallback.
+    }
+  }
   return downloadRemoveLinuxScript();
 }
 
 function downloadRemoveWindowsScript() {
+  const localPath = downloadLocalAssetMap()['windows-remove.ps1'];
+  if (localPath && fs.existsSync(localPath)) {
+    try {
+      return fs.readFileSync(localPath, 'utf8');
+    } catch (_) {
+      // Fall through to inline fallback.
+    }
+  }
   return `$ErrorActionPreference = 'SilentlyContinue'
-$root = if ($env:DEFEND_ROOT_DIR) { $env:DEFEND_ROOT_DIR } else { Join-Path $env:USERPROFILE '.defendmesh' }
-$work = if ($env:DEFEND_WORK_DIR) { $env:DEFEND_WORK_DIR } else { Join-Path $env:TEMP 'defendmesh-bootstrap' }
-Write-Output '[1/4] Stopping DefendMesh monitor/agent processes...'
 Get-CimInstance Win32_Process | Where-Object {
-  $_.CommandLine -and (
-    $_.CommandLine -like '*connection-monitor.ps1*' -or
-    $_.CommandLine -like '*node-agent.ps1*'
-  )
+  $_.CommandLine -and ($_.CommandLine -like '*connection-monitor.ps1*' -or $_.CommandLine -like '*node-agent.ps1*')
 } | ForEach-Object {
   try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
 }
-Write-Output '[2/4] Removing bootstrap workspace...'
-Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
-Write-Output '[3/4] Removing DefendMesh output directories...'
-Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath '.\\output\\live-dashboard' -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath '.\\output\\node-agent' -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath '.\\output\\oneclick-live-dashboard' -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath '.\\output\\oneclick-node-agent' -Recurse -Force -ErrorAction SilentlyContinue
-Write-Output '[4/4] Removal complete.'
+Remove-Item -LiteralPath (Join-Path $env:USERPROFILE '.defendmesh') -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Join-Path $env:TEMP 'defendmesh-bootstrap') -Recurse -Force -ErrorAction SilentlyContinue
+Write-Output 'Removal complete.'
 `;
 }
 
@@ -1366,6 +1420,18 @@ function renderNodes(nodes, authorized) {
 function dashboardHtml(authorized) {
   const now = Date.now();
   const list = renderNodes(asNodeSnapshot(now), authorized);
+  const flagAscii = [
+    '***************==============================',
+    '***************==============================',
+    '***************==============================',
+    '***************==============================',
+    '***************==============================',
+    '=============================================',
+    '=============================================',
+    '=============================================',
+    '=============================================',
+    '============================================='
+  ].join('\n');
   const gitBase = githubBaseUrl();
   const linuxDl = `${publicUrlBase}/download/linux`;
   const macDl = `${publicUrlBase}/download/macos`;
@@ -1494,6 +1560,7 @@ pre { border: 1px solid #2a2a2a; background: #0a0a0a; color: #ddd; padding: 8px;
 .cmd-row code { display: block; white-space: nowrap; overflow-x: auto; color: #e8e8e8; font-size: 11px; flex: 1 1 auto; }
 .copy-btn { border: 1px solid #3a3a3a; background: #1e1e1e; color: #fff; padding: 6px 10px; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; cursor: pointer; }
 .copy-btn:hover { background: #2a2a2a; }
+.flag { margin: 8px auto 10px auto; max-width: 520px; text-align: center; color: #c7d2fe; background: #0b1220; border: 1px solid #2a2a2a; padding: 8px; white-space: pre; font-size: 11px; line-height: 1.25; }
 .mission { margin: 8px 0 10px 0; padding: 8px 10px; border: 1px solid #2a2a2a; background: #0d1117; color: #d1fae5; font-size: 12px; }
 .ops { margin-top: 14px; border-top: 1px solid #2a2a2a; padding-top: 12px; }
 .ops-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 10px; }
@@ -1510,6 +1577,7 @@ pre { border: 1px solid #2a2a2a; background: #0a0a0a; color: #ddd; padding: 8px;
 <div class="panel">
 <h1>${escHtml(anchorName)}</h1>
 <div class="meta">route=${escHtml(publicUrl)} | auth_view=${authorized ? 'authorized_real' : 'public_spoofed'} | nodes=${list.length} | est=${escHtml(formatEstMinus5(now))}</div>
+<pre class="flag">${escHtml(flagAscii)}</pre>
 <div class="mission">${escHtml(missionStatement)}</div>
 ${authorized ? '<div class="meta"><a href="/admin/logout">logout</a></div>' : ''}
 <table>
