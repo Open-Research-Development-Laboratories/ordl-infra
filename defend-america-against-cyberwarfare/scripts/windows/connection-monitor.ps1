@@ -21,7 +21,7 @@ if (-not (Test-Path -LiteralPath $OutputDir -PathType Container)) {
 $dashboardPath = Join-Path $OutputDir 'dashboard.html'
 $jsonPath = Join-Path $OutputDir 'live.json'
 $logPath = Join-Path $OutputDir 'monitor.log'
-$history = New-Object System.Collections.Generic.List[object]
+$samples = New-Object System.Collections.Generic.List[object]
 $prev = -1
 $iter = 0
 
@@ -113,8 +113,8 @@ while ($true) {
         count = $count
         trend = $trend
     }
-    $history.Add([pscustomobject]$sample) | Out-Null
-    while ($history.Count -gt $HistoryPoints) { $history.RemoveAt(0) }
+    $samples.Add([pscustomobject]$sample) | Out-Null
+    while ($samples.Count -gt $HistoryPoints) { $samples.RemoveAt(0) }
 
     $payload = [ordered]@{
         updated_at = (Get-Date).ToString('o')
@@ -122,10 +122,10 @@ while ($true) {
         connections_present = $presence
         current_count = $count
         trend = $trend
-        history = @($history)
+        history = @($samples.ToArray())
     }
     $payload | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
-    Write-Dashboard -CurrentCount $count -Trend $trend -Presence $presence -Recent @($history)
+    Write-Dashboard -CurrentCount $count -Trend $trend -Presence $presence -Recent @($samples.ToArray())
 
     $line = "[{0}] count={1} trend={2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $count, $trend
     $line | Add-Content -LiteralPath $logPath -Encoding UTF8
