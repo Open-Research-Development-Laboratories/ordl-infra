@@ -3,19 +3,24 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
+const https = require('node:https');
 
 const bind = process.env.ANCHOR_BIND || '0.0.0.0';
 const parsedPort = Number(process.env.ANCHOR_PORT || 8787);
 const port = Number.isInteger(parsedPort) && parsedPort > 0 && parsedPort < 65536 ? parsedPort : 8787;
 const anchorName = process.env.ANCHOR_NAME || 'DefendMesh Anchor';
 const publicUrl = process.env.ANCHOR_PUBLIC_URL || 'https://defend.ordl.org';
+const publicUrlBase = publicUrl.replace(/\/+$/, '');
 const nodeTokensFile = process.env.ANCHOR_NODE_TOKENS_FILE || './node-tokens.json';
+const githubRepo = (process.env.ANCHOR_GITHUB_REPO || 'https://github.com/Open-Research-Development-Laboratories/ordl-infra.git').trim();
+const githubRef = (process.env.ANCHOR_GITHUB_REF || 'main').trim();
 
 const nodeBearerToken = process.env.ANCHOR_NODE_TOKEN || '';
 const cfServiceId = process.env.ANCHOR_CF_SERVICE_TOKEN_ID || '';
 const cfServiceSecret = process.env.ANCHOR_CF_SERVICE_TOKEN_SECRET || '';
 
 const adminDevToken = process.env.ANCHOR_ADMIN_DEV_TOKEN || '';
+const openEnroll = String(process.env.ANCHOR_OPEN_ENROLL || 'true').trim().toLowerCase() !== 'false';
 const allowedEmails = (process.env.ANCHOR_ALLOWED_EMAILS || '')
   .split(',')
   .map((v) => v.trim().toLowerCase())
@@ -124,6 +129,19 @@ function sendHtml(res, statusCode, html) {
     'Cache-Control': 'no-store'
   });
   res.end(html);
+}
+
+function sendText(res, statusCode, text, filename) {
+  const headers = {
+    'Content-Type': 'application/octet-stream',
+    'Content-Length': Buffer.byteLength(text),
+    'Cache-Control': 'no-store'
+  };
+  if (filename) {
+    headers['Content-Disposition'] = `attachment; filename="${filename}"`;
+  }
+  res.writeHead(statusCode, headers);
+  res.end(text);
 }
 
 function badRequest(res, message) {
@@ -290,6 +308,141 @@ function spoofHostname(value) {
   return `node-${digest}`;
 }
 
+function githubBaseUrl() {
+  return githubRepo.replace(/\.git$/, '');
+}
+
+function githubRawBasePath() {
+  const base = githubBaseUrl();
+  if (base.startsWith('https://github.com/')) {
+    const tail = base.slice('https://github.com/'.length).replace(/\/+$/, '');
+    return `https://raw.githubusercontent.com/${tail}/${githubRef}/defend-america-against-cyberwarfare`;
+  }
+  return '';
+}
+
+function downloadAssetMap() {
+  const rawBase = githubRawBasePath();
+  if (!rawBase) return {};
+  return {
+    'deploy-all.sh': `${rawBase}/scripts/deploy/deploy-all.sh`,
+    'linux-connection-monitor.sh': `${rawBase}/scripts/linux/connection-monitor.sh`,
+    'windows-connection-monitor.ps1': `${rawBase}/scripts/windows/connection-monitor.ps1`
+  };
+}
+
+function fetchRemoteText(url) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(
+      url,
+      {
+        timeout: 10000,
+        headers: { 'User-Agent': 'defendmesh-anchor/1.0' }
+      },
+      (upstream) => {
+        if (upstream.statusCode !== 200) {
+          upstream.resume();
+          reject(new Error(`upstream status ${upstream.statusCode || 0}`));
+          return;
+        }
+
+        const chunks = [];
+        let size = 0;
+        upstream.on('data', (chunk) => {
+          size += chunk.length;
+          if (size > 2 * 1024 * 1024) {
+            req.destroy(new Error('upstream payload too large'));
+            return;
+          }
+          chunks.push(chunk);
+        });
+        upstream.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+      }
+    );
+    req.on('timeout', () => req.destroy(new Error('upstream timeout')));
+    req.on('error', reject);
+  });
+}
+
+function downloadLinuxScript() {
+  const rawBase = githubRawBasePath();
+  const monitorUrl = `${rawBase}/scripts/linux/connection-monitor.sh`;
+  return `#!/usr/bin/env bash
+set -euo pipefail
+ANCHOR_URL="\${DEFEND_ANCHOR_URL:-${publicUrlBase}}"
+NODE_ID="\${DEFEND_NODE_ID:-$(hostname 2>/dev/null || echo node-linux)}"
+OUTPUT_DIR="\${DEFEND_OUTPUT_DIR:-\${HOME:-/tmp}/.defendmesh/output/live-dashboard}"
+WORK_DIR="\${TMPDIR:-/tmp}/defendmesh-bootstrap"
+MONITOR="$WORK_DIR/connection-monitor.sh"
+mkdir -p "$WORK_DIR" "$OUTPUT_DIR"
+if command -v curl >/dev/null 2>&1; then
+  curl -fsSL "${monitorUrl}" -o "$MONITOR"
+elif command -v wget >/dev/null 2>&1; then
+  wget -q -O "$MONITOR" "${monitorUrl}"
+else
+  echo "need curl or wget" >&2
+  exit 1
+fi
+chmod +x "$MONITOR"
+ANCHOR_TOKEN="\${DEFEND_ANCHOR_TOKEN:-}"
+if [ -z "$ANCHOR_TOKEN" ]; then
+  ENROLL_URL="\${ANCHOR_URL%/}/api/v1/node/enroll"
+  ENROLL_PAYLOAD="{\\"node_id\\":\\"$NODE_ID\\",\\"platform\\":\\"linux\\"}"
+  if command -v curl >/dev/null 2>&1; then
+    ENROLL_RESP="$(curl -fsS -m 10 -X POST -H 'Content-Type: application/json' -d "$ENROLL_PAYLOAD" "$ENROLL_URL" 2>/dev/null || true)"
+  elif command -v wget >/dev/null 2>&1; then
+    ENROLL_RESP="$(wget -qO- --timeout=10 --header='Content-Type: application/json' --post-data="$ENROLL_PAYLOAD" "$ENROLL_URL" 2>/dev/null || true)"
+  fi
+  if [ -n "\${ENROLL_RESP:-}" ]; then
+    ANCHOR_TOKEN="$(printf '%s' "$ENROLL_RESP" | sed -n 's/.*"token":"\\([^"]*\\)".*/\\1/p' | head -n 1)"
+  fi
+fi
+MON_ARGS=(--anchor-url "$ANCHOR_URL" --node-id "$NODE_ID" --output-dir "$OUTPUT_DIR")
+if [ -n "$ANCHOR_TOKEN" ]; then
+  MON_ARGS+=(--anchor-token "$ANCHOR_TOKEN")
+fi
+nohup "$MONITOR" "\${MON_ARGS[@]}" > "$OUTPUT_DIR/monitor-stdout.log" 2>&1 &
+PID="$!"
+echo "started monitor pid=$PID node=$NODE_ID anchor=$ANCHOR_URL output=$OUTPUT_DIR"
+if [ -n "$ANCHOR_TOKEN" ]; then
+  echo "anchor token auto-provisioned"
+else
+  echo "warning: no anchor token; heartbeat may be rejected by anchor policy"
+fi
+`;
+}
+
+function downloadMacosScript() {
+  return downloadLinuxScript().replace('node-linux', 'node-macos');
+}
+
+function downloadWindowsScript() {
+  const rawBase = githubRawBasePath();
+  const monitorUrl = `${rawBase}/scripts/windows/connection-monitor.ps1`;
+  return `$ErrorActionPreference = 'Stop'
+$AnchorUrl = if ($env:DEFEND_ANCHOR_URL) { $env:DEFEND_ANCHOR_URL } else { '${publicUrlBase}' }
+$NodeId = if ($env:DEFEND_NODE_ID) { $env:DEFEND_NODE_ID } else { $env:COMPUTERNAME }
+$OutputDir = if ($env:DEFEND_OUTPUT_DIR) { $env:DEFEND_OUTPUT_DIR } else { Join-Path $env:USERPROFILE '.defendmesh\\output\\live-dashboard' }
+$AnchorToken = $env:DEFEND_ANCHOR_TOKEN
+$TmpRoot = Join-Path $env:TEMP 'defendmesh-bootstrap'
+$MonitorPath = Join-Path $TmpRoot 'connection-monitor.ps1'
+New-Item -ItemType Directory -Path $TmpRoot -Force | Out-Null
+New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+Invoke-WebRequest -UseBasicParsing -Uri '${monitorUrl}' -OutFile $MonitorPath
+if ([string]::IsNullOrWhiteSpace($AnchorToken)) {
+  try {
+    $EnrollBody = @{ node_id = $NodeId; platform = 'windows' } | ConvertTo-Json -Compress
+    $Enroll = Invoke-RestMethod -Method Post -ContentType 'application/json' -Uri (($AnchorUrl.TrimEnd('/')) + '/api/v1/node/enroll') -Body $EnrollBody
+    if ($Enroll -and $Enroll.token) { $AnchorToken = [string]$Enroll.token }
+  } catch {}
+}
+$args = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$MonitorPath,'-AnchorUrl',$AnchorUrl,'-NodeId',$NodeId,'-OutputDir',$OutputDir)
+if (-not [string]::IsNullOrWhiteSpace($AnchorToken)) { $args += @('-AnchorToken',$AnchorToken) }
+Start-Process -FilePath 'powershell.exe' -ArgumentList $args -WindowStyle Hidden
+Write-Output ('started monitor node=' + $NodeId + ' anchor=' + $AnchorUrl + ' output=' + $OutputDir)
+`;
+}
+
 function renderNodes(nodes, authorized) {
   return nodes.map((n) => ({
     ...n,
@@ -301,6 +454,13 @@ function renderNodes(nodes, authorized) {
 function dashboardHtml(authorized) {
   const now = Date.now();
   const list = renderNodes(asNodeSnapshot(now), authorized);
+  const gitBase = githubBaseUrl();
+  const linuxDl = `${publicUrlBase}/download/linux`;
+  const macDl = `${publicUrlBase}/download/macos`;
+  const winDl = `${publicUrlBase}/download/windows`;
+  const winMonitor = `${publicUrlBase}/download/asset/windows-connection-monitor.ps1`;
+  const linMonitor = `${publicUrlBase}/download/asset/linux-connection-monitor.sh`;
+  const deployAll = `${publicUrlBase}/download/asset/deploy-all.sh`;
   const rows = list.length
     ? list
         .map((node) => `<tr>
@@ -340,6 +500,11 @@ th, td { border: 1px solid #2a2a2a; padding: 7px 8px; text-align: left; font-siz
 th { background: #0a0a0a; color: #fff; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
 td { color: #ccc; }
 tbody tr:hover td { background: #1a1a1a; color: #fff; }
+pre { border: 1px solid #2a2a2a; background: #0a0a0a; color: #ddd; padding: 8px; font-size: 12px; overflow-x: auto; }
+.downloads { margin-top: 14px; border-top: 1px solid #2a2a2a; padding-top: 12px; }
+.downloads-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; }
+.downloads-grid .panel2 { border: 1px solid #2a2a2a; padding: 10px; }
+.downloads-grid h3 { margin: 0 0 8px 0; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: #fff; }
 </style>
 </head>
 <body>
@@ -367,6 +532,32 @@ tbody tr:hover td { background: #1a1a1a; color: #fff; }
 </thead>
 <tbody>${rows}</tbody>
 </table>
+<div class="downloads">
+<h2 style="margin:14px 0 8px 0;font-size:15px;text-transform:uppercase;letter-spacing:.05em;">Connect Node</h2>
+<div class="meta">Download from this anchor or pull direct from GitHub.</div>
+<div class="downloads-grid">
+<div class="panel2">
+<h3>Direct Downloads</h3>
+<div><a href="${escHtml(winDl)}">Windows bootstrap (.ps1)</a></div>
+<div><a href="${escHtml(linuxDl)}">Linux bootstrap (.sh)</a></div>
+<div><a href="${escHtml(macDl)}">macOS bootstrap (.sh)</a></div>
+</div>
+<div class="panel2">
+<h3>One-line Run</h3>
+<pre>Linux: curl -fsSL ${escHtml(linuxDl)} | bash
+macOS: curl -fsSL ${escHtml(macDl)} | bash
+Windows: powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr -UseBasicParsing ${escHtml(winDl)} -OutFile $env:TEMP\\defendmesh.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\\defendmesh.ps1"</pre>
+</div>
+<div class="panel2">
+<h3>GitHub Source</h3>
+<div><a href="${escHtml(gitBase)}">${escHtml(gitBase)}</a></div>
+<pre>git clone ${escHtml(githubRepo)} && cd ordl-infra/defend-america-against-cyberwarfare</pre>
+<div><a href="${escHtml(deployAll)}">deploy-all.sh</a></div>
+<div><a href="${escHtml(linMonitor)}">linux connection-monitor.sh</a></div>
+<div><a href="${escHtml(winMonitor)}">windows connection-monitor.ps1</a></div>
+</div>
+</div>
+</div>
 </div>
 </div>
 </body>
@@ -470,6 +661,27 @@ function handleNodeProfile(body, res) {
   };
   profilesByNode.set(nodeId, record);
   sendJson(res, 200, { ok: true, node_id: nodeId });
+}
+
+function handleNodeEnroll(body, res) {
+  if (!openEnroll) {
+    forbidden(res);
+    return;
+  }
+  if (!body || typeof body !== 'object') return badRequest(res, 'body must be JSON object');
+  const nodeId = String(body.node_id || '').trim();
+  if (!nodeId) return badRequest(res, 'node_id required');
+
+  const existing = nodeTokensByNode.get(nodeId);
+  if (existing && existing.token) {
+    sendJson(res, 200, { ok: true, node_id: nodeId, token: existing.token, existing: true });
+    return;
+  }
+
+  const token = crypto.randomBytes(24).toString('hex');
+  const platform = String(body.platform || 'unknown').trim().toLowerCase().slice(0, 32);
+  setNodeToken(nodeId, token, 'self-enroll', `bootstrap:${platform || 'unknown'}`);
+  sendJson(res, 200, { ok: true, node_id: nodeId, token, existing: false });
 }
 
 function handleNodeTriage(body, res) {
@@ -601,6 +813,38 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === 'GET' && url.pathname === '/download/linux') {
+    sendText(res, 200, downloadLinuxScript(), 'defendmesh-connect-linux.sh');
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/download/macos') {
+    sendText(res, 200, downloadMacosScript(), 'defendmesh-connect-macos.sh');
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/download/windows') {
+    sendText(res, 200, downloadWindowsScript(), 'defendmesh-connect-windows.ps1');
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname.startsWith('/download/asset/')) {
+    const name = decodeURIComponent(url.pathname.replace('/download/asset/', '')).trim();
+    const assetMap = downloadAssetMap();
+    const sourceUrl = assetMap[name];
+    if (!sourceUrl) {
+      notFound(res);
+      return;
+    }
+    try {
+      const content = await fetchRemoteText(sourceUrl);
+      sendText(res, 200, content, name);
+    } catch (_) {
+      sendJson(res, 502, { error: 'download_unavailable' });
+    }
+    return;
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/v1/nodes') {
     const auth = adminAuth(req);
     const view = renderNodes(asNodeSnapshot(Date.now()), auth.ok).map((n) => ({
@@ -610,6 +854,18 @@ const server = http.createServer(async (req, res) => {
       spoofed: !auth.ok
     }));
     sendJson(res, 200, view);
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/v1/node/enroll') {
+    let body;
+    try {
+      body = await parseJsonBody(req);
+    } catch (err) {
+      badRequest(res, err.message || 'invalid request body');
+      return;
+    }
+    handleNodeEnroll(body, res);
     return;
   }
 

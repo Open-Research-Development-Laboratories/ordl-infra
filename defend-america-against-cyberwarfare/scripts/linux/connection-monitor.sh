@@ -39,7 +39,10 @@ if [ -z "$ANCHOR_URLS" ] && [ -n "$ANCHOR_URL" ]; then
   ANCHOR_URLS="$ANCHOR_URL"
 fi
 
-mkdir -p "$OUTPUT_DIR"
+if ! mkdir -p "$OUTPUT_DIR" 2>/dev/null; then
+  OUTPUT_DIR="${HOME:-/tmp}/.defendmesh/output/live-dashboard"
+  mkdir -p "$OUTPUT_DIR"
+fi
 DASHBOARD_HTML="$OUTPUT_DIR/dashboard.html"
 LIVE_JSON="$OUTPUT_DIR/live.json"
 MONITOR_LOG="$OUTPUT_DIR/monitor.log"
