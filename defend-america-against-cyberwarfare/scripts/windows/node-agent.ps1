@@ -26,21 +26,20 @@ function Split-AnchorUrls {
     )
 }
 
-$resolvedAnchorUrls = @()
-if ($PSBoundParameters.ContainsKey('AnchorUrl')) {
-    $resolvedAnchorUrls = Split-AnchorUrls -Value $AnchorUrl
+$anchorUrls = New-Object System.Collections.Generic.List[string]
+$seenAnchorUrls = @{}
+foreach ($anchorSource in @($AnchorUrl, $env:DEFEND_ANCHOR_URLS, $env:DEFEND_ANCHOR_URL)) {
+    foreach ($anchor in (Split-AnchorUrls -Value $anchorSource)) {
+        $normalizedAnchor = $anchor.TrimEnd('/')
+        if ($seenAnchorUrls.ContainsKey($normalizedAnchor)) { continue }
+        $seenAnchorUrls[$normalizedAnchor] = $true
+        $anchorUrls.Add($normalizedAnchor) | Out-Null
+    }
 }
-if ($resolvedAnchorUrls.Count -eq 0) {
-    $resolvedAnchorUrls = Split-AnchorUrls -Value $env:DEFEND_ANCHOR_URLS
-}
-if ($resolvedAnchorUrls.Count -eq 0) {
-    $resolvedAnchorUrls = Split-AnchorUrls -Value $env:DEFEND_ANCHOR_URL
-}
-if ($resolvedAnchorUrls.Count -eq 0) {
+if ($anchorUrls.Count -eq 0) {
     throw 'AnchorUrl is required (param AnchorUrl, DEFEND_ANCHOR_URLS, or DEFEND_ANCHOR_URL)'
 }
-$anchorUrls = @($resolvedAnchorUrls)
-$anchorUrlList = ($anchorUrls -join ',')
+$anchorUrlList = ($anchorUrls.ToArray() -join ',')
 if ($PollSec -lt 2) { $PollSec = 2 }
 
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null

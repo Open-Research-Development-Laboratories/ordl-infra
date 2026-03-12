@@ -27,23 +27,23 @@ $logPath = Join-Path $OutputDir 'monitor.log'
 $samples = New-Object System.Collections.Generic.List[object]
 $prev = -1
 $iter = 0
-$heartbeatUrls = @()
-$anchorSource = $null
-if (-not [string]::IsNullOrWhiteSpace($AnchorUrl)) {
-    $anchorSource = $AnchorUrl
-} elseif (-not [string]::IsNullOrWhiteSpace($env:DEFEND_ANCHOR_URLS)) {
-    $anchorSource = $env:DEFEND_ANCHOR_URLS
-} elseif (-not [string]::IsNullOrWhiteSpace($env:DEFEND_ANCHOR_URL)) {
-    $anchorSource = $env:DEFEND_ANCHOR_URL
-}
-if (-not [string]::IsNullOrWhiteSpace($anchorSource)) {
-    foreach ($anchor in ($anchorSource -split '[;,]')) {
+$heartbeatUrls = New-Object System.Collections.Generic.List[string]
+$seenHeartbeatAnchors = @{}
+function Add-HeartbeatAnchors {
+    param([string]$Source)
+    if ([string]::IsNullOrWhiteSpace($Source)) { return }
+    foreach ($anchor in ($Source -split '[,;]')) {
         $trimmedAnchor = $anchor.Trim()
-        if (-not [string]::IsNullOrWhiteSpace($trimmedAnchor)) {
-            $heartbeatUrls += ('{0}/api/v1/heartbeat' -f $trimmedAnchor.TrimEnd('/'))
-        }
+        if ([string]::IsNullOrWhiteSpace($trimmedAnchor)) { continue }
+        $normalizedAnchor = $trimmedAnchor.TrimEnd('/')
+        if ($seenHeartbeatAnchors.ContainsKey($normalizedAnchor)) { continue }
+        $seenHeartbeatAnchors[$normalizedAnchor] = $true
+        $heartbeatUrls.Add(('{0}/api/v1/heartbeat' -f $normalizedAnchor)) | Out-Null
     }
 }
+Add-HeartbeatAnchors -Source $AnchorUrl
+Add-HeartbeatAnchors -Source $env:DEFEND_ANCHOR_URLS
+Add-HeartbeatAnchors -Source $env:DEFEND_ANCHOR_URL
 $heartbeatNodeId = if ([string]::IsNullOrWhiteSpace($NodeId)) { $env:COMPUTERNAME } else { $NodeId }
 $heartbeatHeaders = @{}
 if (-not [string]::IsNullOrWhiteSpace($AnchorToken)) {

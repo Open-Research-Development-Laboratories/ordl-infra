@@ -564,12 +564,20 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === 'GET' && url.pathname === '/') {
-    sendHtml(res, 200, dashboardHtml());
+    const auth = adminAuth(req);
+    sendHtml(res, 200, dashboardHtml(auth.ok));
     return;
   }
 
   if (req.method === 'GET' && url.pathname === '/api/v1/nodes') {
-    sendJson(res, 200, asNodeSnapshot(Date.now()));
+    const auth = adminAuth(req);
+    const view = renderNodes(asNodeSnapshot(Date.now()), auth.ok).map((n) => ({
+      ...n,
+      client_host: n.display_host,
+      client_user: n.display_user,
+      spoofed: !auth.ok
+    }));
+    sendJson(res, 200, view);
     return;
   }
 
