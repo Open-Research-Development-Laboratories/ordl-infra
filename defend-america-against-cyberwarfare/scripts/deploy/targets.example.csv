@@ -1,0 +1,3 @@
+name,host,user,os,mode,monitor,password_env,anchor_url,anchor_token_env,node_id
+windows-edge,10.0.0.254,winsock,windows,audit,start,DEFEND_SSH_PASSWORD,https://defend.ordl.org,DEFEND_ANCHOR_TOKEN,edge-windows-1
+linux-laptop,203.0.113.20,ubuntu,linux,audit,start,DEFEND_SSH_PASSWORD,https://defend.ordl.org,DEFEND_ANCHOR_TOKEN,laptop-linux-1

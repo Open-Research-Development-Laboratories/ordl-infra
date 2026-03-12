@@ -4,12 +4,15 @@ set -u
 INTERVAL_SEC=2
 HISTORY_POINTS=180
 LOOP_COUNT=0
+ANCHOR_URL="${DEFEND_ANCHOR_URL:-}"
+NODE_ID="${DEFEND_NODE_ID:-}"
+ANCHOR_TOKEN="${DEFEND_ANCHOR_TOKEN:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 OUTPUT_DIR="$REPO_ROOT/output/live-dashboard"
 
 usage() {
-  echo "Usage: connection-monitor.sh [--interval-sec N] [--history-points N] [--loop-count N] [--output-dir DIR]"
+  echo "Usage: connection-monitor.sh [--interval-sec N] [--history-points N] [--loop-count N] [--output-dir DIR] [--anchor-url URL] [--node-id ID] [--anchor-token TOKEN]"
 }
 
 while [ $# -gt 0 ]; do
@@ -18,6 +21,9 @@ while [ $# -gt 0 ]; do
     --history-points) shift; HISTORY_POINTS="${1:-180}" ;;
     --loop-count) shift; LOOP_COUNT="${1:-0}" ;;
     --output-dir) shift; OUTPUT_DIR="${1:-$OUTPUT_DIR}" ;;
+    --anchor-url) shift; ANCHOR_URL="${1:-$ANCHOR_URL}" ;;
+    --node-id) shift; NODE_ID="${1:-$NODE_ID}" ;;
+    --anchor-token) shift; ANCHOR_TOKEN="${1:-$ANCHOR_TOKEN}" ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown arg: $1" >&2; usage >&2; exit 1 ;;
   esac
@@ -26,6 +32,7 @@ done
 
 [ "$INTERVAL_SEC" -lt 1 ] 2>/dev/null && INTERVAL_SEC=1
 [ "$HISTORY_POINTS" -lt 10 ] 2>/dev/null && HISTORY_POINTS=10
+[ -z "$NODE_ID" ] && NODE_ID="$(hostname 2>/dev/null || echo "unknown-node")"
 
 mkdir -p "$OUTPUT_DIR"
 DASHBOARD_HTML="$OUTPUT_DIR/dashboard.html"
@@ -44,6 +51,68 @@ get_connection_count() {
     return
   fi
   echo 0
+}
+
+json_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+send_anchor_heartbeat() {
+  local presence="$1"
+  local count="$2"
+  local trend="$3"
+  local updated_at="$4"
+  local endpoint="${ANCHOR_URL%/}/api/v1/heartbeat"
+  local node_id_json
+  local trend_norm
+  local presence_bool
+  local payload
+  node_id_json="$(json_escape "$NODE_ID")"
+  case "$trend" in
+    UP) trend_norm="up" ;;
+    DOWN) trend_norm="down" ;;
+    *) trend_norm="steady" ;;
+  esac
+  if [ "$presence" = "YES" ]; then
+    presence_bool="true"
+  else
+    presence_bool="false"
+  fi
+  payload="$(printf '{"node_id":"%s","platform":"linux","connections_present":%s,"current_count":%s,"trend":"%s","updated_at":"%s"}' "$node_id_json" "$presence_bool" "$count" "$trend_norm" "$updated_at")"
+
+  if command -v curl >/dev/null 2>&1; then
+    if [ -n "$ANCHOR_TOKEN" ]; then
+      curl -fsS -m 10 -X POST \
+        -H 'Content-Type: application/json' \
+        -H "Authorization: Bearer $ANCHOR_TOKEN" \
+        -d "$payload" \
+        "$endpoint" >/dev/null 2>&1
+    else
+      curl -fsS -m 10 -X POST \
+        -H 'Content-Type: application/json' \
+        -d "$payload" \
+        "$endpoint" >/dev/null 2>&1
+    fi
+    return $?
+  fi
+
+  if command -v wget >/dev/null 2>&1; then
+    if [ -n "$ANCHOR_TOKEN" ]; then
+      wget -q -O /dev/null --timeout=10 \
+        --header='Content-Type: application/json' \
+        --header="Authorization: Bearer $ANCHOR_TOKEN" \
+        --post-data="$payload" \
+        "$endpoint" >/dev/null 2>&1
+    else
+      wget -q -O /dev/null --timeout=10 \
+        --header='Content-Type: application/json' \
+        --post-data="$payload" \
+        "$endpoint" >/dev/null 2>&1
+    fi
+    return $?
+  fi
+
+  return 127
 }
 
 write_dashboard() {
@@ -123,12 +192,21 @@ while true; do
   if [ "$count" -gt 0 ] 2>/dev/null; then presence="YES"; fi
 
   ts="$(date '+%Y-%m-%d %H:%M:%S')"
+  updated_at_utc="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   printf '%s,%s,%s\n' "$ts" "$count" "$trend" >> "$HISTORY_CSV"
   trim_history
 
+  if [ -n "$ANCHOR_URL" ]; then
+    send_anchor_heartbeat "$presence" "$count" "$trend" "$updated_at_utc"
+    hb_rc=$?
+    if [ "$hb_rc" -ne 0 ]; then
+      echo "[$ts] anchor heartbeat failed (exit=$hb_rc)" >> "$MONITOR_LOG"
+    fi
+  fi
+
   cat > "$LIVE_JSON" <<EOF_JSON
 {
-  "updated_at": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
+  "updated_at": "$updated_at_utc",
   "interval_sec": $INTERVAL_SEC,
   "connections_present": "$presence",
   "current_count": $count,

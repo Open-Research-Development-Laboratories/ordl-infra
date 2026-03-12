@@ -3,7 +3,10 @@ param(
     [int]$IntervalSec = 2,
     [int]$HistoryPoints = 180,
     [int]$LoopCount = 0,
-    [string]$OutputDir
+    [string]$OutputDir,
+    [string]$AnchorUrl = $env:DEFEND_ANCHOR_URL,
+    [string]$NodeId = $env:DEFEND_NODE_ID,
+    [string]$AnchorToken = $env:DEFEND_ANCHOR_TOKEN
 )
 
 $scriptRoot = Split-Path -Parent $PSCommandPath
@@ -24,6 +27,15 @@ $logPath = Join-Path $OutputDir 'monitor.log'
 $samples = New-Object System.Collections.Generic.List[object]
 $prev = -1
 $iter = 0
+$heartbeatUrl = $null
+if (-not [string]::IsNullOrWhiteSpace($AnchorUrl)) {
+    $heartbeatUrl = ('{0}/api/v1/heartbeat' -f $AnchorUrl.TrimEnd('/'))
+}
+$heartbeatNodeId = if ([string]::IsNullOrWhiteSpace($NodeId)) { $env:COMPUTERNAME } else { $NodeId }
+$heartbeatHeaders = @{}
+if (-not [string]::IsNullOrWhiteSpace($AnchorToken)) {
+    $heartbeatHeaders['Authorization'] = "Bearer $AnchorToken"
+}
 
 function Get-ConnectionCount {
     try {
@@ -107,12 +119,47 @@ while ($true) {
     }
     $prev = $count
     $presence = if ($count -gt 0) { 'YES' } else { 'NO' }
+    $presenceBool = ($count -gt 0)
+    $heartbeatTrend = switch ($trend) {
+        'UP' { 'up' }
+        'DOWN' { 'down' }
+        default { 'steady' }
+    }
 
     $sample = [ordered]@{
         ts = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
         count = $count
         trend = $trend
     }
+
+    if ($heartbeatUrl) {
+        try {
+            $heartbeatPayload = [ordered]@{
+                node_id = $heartbeatNodeId
+                platform = 'windows'
+                connections_present = $presenceBool
+                current_count = $count
+                trend = $heartbeatTrend
+                updated_at = (Get-Date).ToString('o')
+            }
+            $invokeParams = @{
+                Method = 'Post'
+                Uri = $heartbeatUrl
+                ContentType = 'application/json'
+                Body = ($heartbeatPayload | ConvertTo-Json -Depth 4 -Compress)
+                ErrorAction = 'Stop'
+            }
+            if ($heartbeatHeaders.Count -gt 0) {
+                $invokeParams['Headers'] = $heartbeatHeaders
+            }
+            Invoke-RestMethod @invokeParams | Out-Null
+        } catch {
+            $errMsg = $_.Exception.Message -replace '\s+', ' '
+            $hbLine = "[{0}] heartbeat_error uri={1} msg={2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $heartbeatUrl, $errMsg
+            $hbLine | Add-Content -LiteralPath $logPath -Encoding UTF8
+        }
+    }
+
     $samples.Add([pscustomobject]$sample) | Out-Null
     while ($samples.Count -gt $HistoryPoints) { $samples.RemoveAt(0) }
 

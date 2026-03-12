@@ -2,6 +2,16 @@
 
 Defensive-only host triage and containment scripts for Windows and Linux.
 
+## DefendMesh Anchor (Zero Trust Node System)
+
+Use `anchor/` as the central control plane exposed on `defend.ordl.org` via tunnel.
+
+- Operators authenticate with Zero Trust email login (for example `.gov` / `.mil` / org domains).
+- Nodes send heartbeat/logs over outbound HTTPS.
+- Operators queue approved defensive playbooks and patch bundles through anchor APIs.
+
+See [`anchor/README.md`](./anchor/README.md).
+
 ## Point-and-Click (Windows)
 
 Run:
@@ -27,6 +37,10 @@ Realtime dashboard monitor:
 
 `powershell -ExecutionPolicy Bypass -File .\\scripts\\windows\\connection-monitor.ps1 -IntervalSec 2`
 
+With anchor heartbeat:
+
+`powershell -ExecutionPolicy Bypass -File .\\scripts\\windows\\connection-monitor.ps1 -IntervalSec 2 -AnchorUrl https://defend.ordl.org -NodeId edge-1 -AnchorToken $env:DEFEND_ANCHOR_TOKEN`
+
 ## Linux CLI
 
 Audit:
@@ -40,6 +54,10 @@ Remediate:
 Realtime dashboard monitor:
 
 `bash ./scripts/linux/connection-monitor.sh --interval-sec 2`
+
+With anchor heartbeat:
+
+`bash ./scripts/linux/connection-monitor.sh --interval-sec 2 --anchor-url https://defend.ordl.org --node-id laptop-1 --anchor-token \"$DEFEND_ANCHOR_TOKEN\"`
 
 ## Control File Mode Switching (No Listening Port)
 
