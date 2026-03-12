@@ -31,6 +31,7 @@ const queuesByNode = new Map();
 const resultsByNode = new Map();
 const patches = new Map();
 const profilesByNode = new Map();
+const triageByNode = new Map();
 const nodeTokensByNode = new Map();
 const nodeIdsByToken = new Map();
 
@@ -257,6 +258,7 @@ function asNodeSnapshot(nowMs) {
   const out = [];
   for (const node of nodes.values()) {
     const profile = profilesByNode.get(node.node_id) || {};
+    const triage = triageByNode.get(node.node_id) || null;
     const ageSec = Math.max(0, Math.floor((nowMs - node._updatedMs) / 1000));
     out.push({
       node_id: node.node_id,
@@ -273,7 +275,9 @@ function asNodeSnapshot(nowMs) {
       client_build: profile.client_build || '',
       client_arch: profile.client_arch || '',
       client_kernel: profile.client_kernel || '',
-      latency_ms: isFiniteNumber(node.latency_ms) ? node.latency_ms : 0
+      latency_ms: isFiniteNumber(node.latency_ms) ? node.latency_ms : 0,
+      latest_severity: triage ? String(triage.severity || 'none') : 'none',
+      latest_incident_at: triage ? String(triage.at || '') : ''
     });
   }
   out.sort((a, b) => a.node_id.localeCompare(b.node_id));
@@ -309,12 +313,13 @@ function dashboardHtml(authorized) {
 <td>${node.current_count}</td>
 <td>${escHtml(node.trend)}</td>
 <td>${node.latency_ms}ms</td>
+<td>${escHtml(node.latest_severity || 'none')}</td>
 <td>${escHtml(node.updated_at)}</td>
 <td>${node.age_sec}s</td>
 <td>${node.queued_tasks}</td>
 </tr>`)
         .join('')
-    : '<tr><td colspan="12">No nodes reported yet.</td></tr>';
+    : '<tr><td colspan="13">No nodes reported yet.</td></tr>';
 
   return `<!doctype html>
 <html lang="en">
@@ -354,6 +359,7 @@ tbody tr:hover td { background: #1a1a1a; color: #fff; }
 <th>current_count</th>
 <th>trend</th>
 <th>latency</th>
+<th>severity</th>
 <th>updated_at</th>
 <th>age</th>
 <th>queued_tasks</th>
@@ -464,6 +470,32 @@ function handleNodeProfile(body, res) {
   };
   profilesByNode.set(nodeId, record);
   sendJson(res, 200, { ok: true, node_id: nodeId });
+}
+
+function handleNodeTriage(body, res) {
+  if (!body || typeof body !== 'object') return badRequest(res, 'body must be JSON object');
+  const nodeId = String(body.node_id || '').trim();
+  if (!nodeId) return badRequest(res, 'node_id required');
+
+  const severityRaw = String(body.severity || 'info').trim().toLowerCase();
+  const severity = ['info', 'low', 'medium', 'high', 'critical'].includes(severityRaw) ? severityRaw : 'info';
+  const indicators = Array.isArray(body.indicators) ? body.indicators.slice(0, 200) : [];
+  const counts = body.counts && typeof body.counts === 'object' ? body.counts : {};
+  const summary = String(body.summary || '').slice(0, 2000);
+  const source = String(body.source || 'endpoint').slice(0, 64);
+  const at = new Date().toISOString();
+
+  const item = {
+    at,
+    node_id: nodeId,
+    source,
+    severity,
+    summary,
+    indicators,
+    counts
+  };
+  pushBounded(triageByNode, nodeId, item, 100);
+  sendJson(res, 200, { ok: true, node_id: nodeId, severity });
 }
 
 function handleAdminTask(body, adminEmail, res) {

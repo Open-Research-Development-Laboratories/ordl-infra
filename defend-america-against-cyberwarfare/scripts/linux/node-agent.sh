@@ -2,6 +2,7 @@
 set -u
 
 ANCHOR_URL="${DEFEND_ANCHOR_URL:-}"
+ANCHOR_URLS="${DEFEND_ANCHOR_URLS:-}"
 NODE_ID="${DEFEND_NODE_ID:-}"
 ANCHOR_TOKEN="${DEFEND_ANCHOR_TOKEN:-}"
 POLL_SEC=10
@@ -10,12 +11,13 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 OUTPUT_DIR="$REPO_ROOT/output/node-agent"
 
 usage() {
-  echo "Usage: node-agent.sh --anchor-url URL [--node-id ID] [--anchor-token TOKEN] [--poll-sec N] [--output-dir DIR]"
+  echo "Usage: node-agent.sh --anchor-url URL|URL1,URL2 [--node-id ID] [--anchor-token TOKEN] [--poll-sec N] [--output-dir DIR]"
 }
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --anchor-url) shift; ANCHOR_URL="${1:-$ANCHOR_URL}" ;;
+    --anchor-urls) shift; ANCHOR_URLS="${1:-$ANCHOR_URLS}" ;;
     --node-id) shift; NODE_ID="${1:-$NODE_ID}" ;;
     --anchor-token) shift; ANCHOR_TOKEN="${1:-$ANCHOR_TOKEN}" ;;
     --poll-sec) shift; POLL_SEC="${1:-10}" ;;
@@ -27,6 +29,12 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -z "$ANCHOR_URL" ]; then
+  ANCHOR_URL="$ANCHOR_URLS"
+fi
+if [ -z "$ANCHOR_URLS" ] && [ -n "$ANCHOR_URL" ]; then
+  ANCHOR_URLS="$ANCHOR_URL"
+fi
+if [ -z "$ANCHOR_URLS" ]; then
   echo "--anchor-url required" >&2
   exit 1
 fi
@@ -40,56 +48,60 @@ json_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g; s/\r/\\r/g; s/\n/\\n/g'
 }
 
+anchor_url_items() {
+  printf '%s' "$ANCHOR_URLS" | tr ';' ',' | awk -F',' '{for(i=1;i<=NF;i++){gsub(/^[ \t]+|[ \t]+$/, "", $i); if($i!="") print $i}}'
+}
+
 anchor_post_json() {
   local path="$1"
   local body="$2"
-  local url="${ANCHOR_URL%/}${path}"
+  local url
+  while IFS= read -r base; do
+    [ -z "$base" ] && continue
+    url="${base%/}${path}"
 
-  if command -v curl >/dev/null 2>&1; then
-    if [ -n "$ANCHOR_TOKEN" ]; then
-      curl -fsS -m 20 -X POST "$url" -H 'Content-Type: application/json' -H "Authorization: Bearer $ANCHOR_TOKEN" -d "$body" >/dev/null 2>&1
-    else
-      curl -fsS -m 20 -X POST "$url" -H 'Content-Type: application/json' -d "$body" >/dev/null 2>&1
+    if command -v curl >/dev/null 2>&1; then
+      if [ -n "$ANCHOR_TOKEN" ]; then
+        curl -fsS -m 20 -X POST "$url" -H 'Content-Type: application/json' -H "Authorization: Bearer $ANCHOR_TOKEN" -d "$body" >/dev/null 2>&1 && return 0
+      else
+        curl -fsS -m 20 -X POST "$url" -H 'Content-Type: application/json' -d "$body" >/dev/null 2>&1 && return 0
+      fi
+    elif command -v wget >/dev/null 2>&1; then
+      if [ -n "$ANCHOR_TOKEN" ]; then
+        wget -q -O /dev/null --timeout=20 --header='Content-Type: application/json' --header="Authorization: Bearer $ANCHOR_TOKEN" --post-data="$body" "$url" >/dev/null 2>&1 && return 0
+      else
+        wget -q -O /dev/null --timeout=20 --header='Content-Type: application/json' --post-data="$body" "$url" >/dev/null 2>&1 && return 0
+      fi
     fi
-    return $?
-  fi
+  done < <(anchor_url_items)
 
-  if command -v wget >/dev/null 2>&1; then
-    if [ -n "$ANCHOR_TOKEN" ]; then
-      wget -q -O /dev/null --timeout=20 --header='Content-Type: application/json' --header="Authorization: Bearer $ANCHOR_TOKEN" --post-data="$body" "$url" >/dev/null 2>&1
-    else
-      wget -q -O /dev/null --timeout=20 --header='Content-Type: application/json' --post-data="$body" "$url" >/dev/null 2>&1
-    fi
-    return $?
-  fi
-
-  return 127
+  return 1
 }
 
 anchor_get_file() {
   local path="$1"
   local out="$2"
-  local url="${ANCHOR_URL%/}${path}"
+  local url
+  while IFS= read -r base; do
+    [ -z "$base" ] && continue
+    url="${base%/}${path}"
 
-  if command -v curl >/dev/null 2>&1; then
-    if [ -n "$ANCHOR_TOKEN" ]; then
-      curl -fsS -m 20 "$url" -H "Authorization: Bearer $ANCHOR_TOKEN" -o "$out"
-    else
-      curl -fsS -m 20 "$url" -o "$out"
+    if command -v curl >/dev/null 2>&1; then
+      if [ -n "$ANCHOR_TOKEN" ]; then
+        curl -fsS -m 20 "$url" -H "Authorization: Bearer $ANCHOR_TOKEN" -o "$out" && return 0
+      else
+        curl -fsS -m 20 "$url" -o "$out" && return 0
+      fi
+    elif command -v wget >/dev/null 2>&1; then
+      if [ -n "$ANCHOR_TOKEN" ]; then
+        wget -q -O "$out" --timeout=20 --header="Authorization: Bearer $ANCHOR_TOKEN" "$url" && return 0
+      else
+        wget -q -O "$out" --timeout=20 "$url" && return 0
+      fi
     fi
-    return $?
-  fi
+  done < <(anchor_url_items)
 
-  if command -v wget >/dev/null 2>&1; then
-    if [ -n "$ANCHOR_TOKEN" ]; then
-      wget -q -O "$out" --timeout=20 --header="Authorization: Bearer $ANCHOR_TOKEN" "$url"
-    else
-      wget -q -O "$out" --timeout=20 "$url"
-    fi
-    return $?
-  fi
-
-  return 127
+  return 1
 }
 
 log_local() {
@@ -235,7 +247,7 @@ PY
   log_local "task=$task_id playbook=$playbook status=$status"
 }
 
-log_local "node-agent start node_id=$NODE_ID anchor=$ANCHOR_URL"
+log_local "node-agent start node_id=$NODE_ID anchors=$ANCHOR_URLS"
 send_node_log "info" "node-agent started"
 
 while true; do

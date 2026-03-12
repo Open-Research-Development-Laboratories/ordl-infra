@@ -339,7 +339,7 @@ run_target() {
       case "$monitor_mode" in
         start)
           log "Starting persistent windows monitor"
-          run_ssh "$user_name" "$host" "$ssh_password" "cmd /c \"schtasks /Delete /TN DefendLiveDashboard /F >nul 2>nul & schtasks /Create /TN DefendLiveDashboard /TR \\\"$win_mon_cmd\\\" /SC ONCE /ST 00:00 /F & schtasks /Run /TN DefendLiveDashboard\""
+          run_ssh "$user_name" "$host" "$ssh_password" "powershell -NoProfile -Command \"Get-CimInstance Win32_Process | Where-Object { \$_.CommandLine -like '*connection-monitor.ps1*' } | ForEach-Object { try { Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }; Start-Process -FilePath 'powershell.exe' -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','$remote_native\\scripts\\windows\\connection-monitor.ps1','-IntervalSec','$INTERVAL_SEC','-OutputDir','$remote_native\\output\\live-dashboard-external'$( [ -n \"$anchor_url\" ] && printf \",'-AnchorUrl','%s'\" \"$anchor_url\" )$( [ -n \"$node_id\" ] && printf \",'-NodeId','%s'\" \"$node_id\" )$( [ -n \"$anchor_token\" ] && printf \",'-AnchorToken','%s'\" \"$anchor_token\" ) -WindowStyle Hidden\""
           ;;
         oneshot)
           log "Running oneshot windows monitor loops=$LOOP_COUNT"
@@ -347,7 +347,7 @@ run_target() {
           ;;
         stop)
           log "Stopping windows monitor task"
-          run_ssh "$user_name" "$host" "$ssh_password" "cmd /c \"schtasks /End /TN DefendLiveDashboard >nul 2>nul & schtasks /Delete /TN DefendLiveDashboard /F >nul 2>nul\""
+          run_ssh "$user_name" "$host" "$ssh_password" "powershell -NoProfile -Command \"Get-CimInstance Win32_Process | Where-Object { \$_.CommandLine -like '*connection-monitor.ps1*' } | ForEach-Object { try { Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }\""
           ;;
         off) ;;
       esac
